@@ -1,0 +1,142 @@
+{
+  "New York": {
+    "icao": "KNYC",
+    "ghcnd": "USW00094728",
+    "cli": "NYC",
+    "lat": 40.71,
+    "lon": -74.01
+  },
+  "Los Angeles": {
+    "icao": "KLAX",
+    "ghcnd": "USW00023174",
+    "cli": "LAX",
+    "lat": 34.05,
+    "lon": -118.24
+  },
+  "Chicago": {
+    "icao": "KORD",
+    "ghcnd": "USW00094846",
+    "cli": "ORD",
+    "lat": 41.88,
+    "lon": -87.63
+  },
+  "Miami": {
+    "icao": "KMIA",
+    "ghcnd": "USW00012839",
+    "cli": "MIA",
+    "lat": 25.76,
+    "lon": -80.19
+  },
+  "Houston": {
+    "icao": "KIAH",
+    "ghcnd": "USW00012960",
+    "cli": "IAH",
+    "lat": 29.76,
+    "lon": -95.37
+  },
+  "Phoenix": {
+    "icao": "KPHX",
+    "ghcnd": "USW00023183",
+    "cli": "PHX",
+    "lat": 33.45,
+    "lon": -112.07
+  },
+  "Denver": {
+    "icao": "KDEN",
+    "ghcnd": "USW00003017",
+    "cli": "DEN",
+    "lat": 39.74,
+    "lon": -104.99
+  },
+  "Seattle": {
+    "icao": "KSEA",
+    "ghcnd": "USW00024233",
+    "cli": "SEA",
+    "lat": 47.61,
+    "lon": -122.33
+  },
+  "Philadelphia": {
+    "icao": "KPHL",
+    "ghcnd": "USW00013739",
+    "cli": "PHL",
+    "lat": 39.95,
+    "lon": -75.17
+  },
+  "Dallas": {
+    "icao": "KDFW",
+    "ghcnd": "USW00003927",
+    "cli": "DFW",
+    "lat": 32.78,
+    "lon": -96.8
+  },
+  "Austin": {
+    "icao": "KAUS",
+    "ghcnd": "USW00013904",
+    "cli": "AUS",
+    "lat": 30.27,
+    "lon": -97.74
+  },
+  "Boston": {
+    "icao": "KBOS",
+    "ghcnd": "USW00014739",
+    "cli": "BOS",
+    "lat": 42.36,
+    "lon": -71.06
+  },
+  "Atlanta": {
+    "icao": "KATL",
+    "ghcnd": "USW00013874",
+    "cli": "ATL",
+    "lat": 33.75,
+    "lon": -84.39
+  },
+  "Washington DC": {
+    "icao": "KDCA",
+    "ghcnd": "USW00013743",
+    "cli": "DCA",
+    "lat": 38.91,
+    "lon": -77.04
+  },
+  "San Francisco": {
+    "icao": "KSFO",
+    "ghcnd": "USW00023234",
+    "cli": "SFO",
+    "lat": 37.77,
+    "lon": -122.42
+  },
+  "Las Vegas": {
+    "icao": "KLAS",
+    "ghcnd": "USW00023169",
+    "cli": "LAS",
+    "lat": 36.17,
+    "lon": -115.14
+  },
+  "Minneapolis": {
+    "icao": "KMSP",
+    "ghcnd": "USW00014922",
+    "cli": "MSP",
+    "lat": 44.98,
+    "lon": -93.27
+  },
+  "San Antonio": {
+    "icao": "KSAT",
+    "ghcnd": "USW00012921",
+    "cli": "SAT",
+    "lat": 29.42,
+    "lon": -98.49
+  },
+  "New Orleans": {
+    "icao": "KMSY",
+    "ghcnd": "USW00012916",
+    "cli": "MSY",
+    "lat": 29.95,
+    "lon": -90.07
+  },
+  "Oklahoma City": {
+    "icao": "KOKC",
+    "ghcnd": "USW00013967",
+    "cli": "OKC",
+    "lat": 35.47,
+    "lon": -97.52
+  }
+}

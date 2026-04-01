@@ -1,0 +1,391 @@
+"""
+Forecast calibration models for Weather Signals.
+
+Implements:
+- EMOS-style linear forecast correction per city/market type
+- isotonic probability calibration over derived threshold/bucket examples
+- model persistence and runtime loading helpers
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import pickle
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LinearRegression
+
+from src.station_truth import CALIBRATION_MODELS_DIR, _slugify_city
+
+logger = logging.getLogger("weather.calibration")
+
+_MIN_SPREAD_F = 1.0
+_MIN_PROB = 0.001
+_MAX_PROB = 0.999
+
+
+def _normal_cdf(x: float, mu: float, sigma: float) -> float:
+    sigma = max(float(sigma), 1e-6)
+    z = (x - mu) / sigma
+    return 0.5 * math.erfc(-z / math.sqrt(2))
+
+
+def _clip_probability(value: float) -> float:
+    return max(_MIN_PROB, min(_MAX_PROB, float(value)))
+
+
+def compute_temperature_probability(
+    forecast_value_f: float,
+    outcome_low: Optional[float],
+    outcome_high: Optional[float],
+    uncertainty_std_f: float,
+) -> float:
+    """Compute P(actual temp falls in [low, high]) with a normal forecast model."""
+    if outcome_low is not None and outcome_high is not None:
+        prob = _normal_cdf(outcome_high, forecast_value_f, uncertainty_std_f) - _normal_cdf(
+            outcome_low,
+            forecast_value_f,
+            uncertainty_std_f,
+        )
+    elif outcome_low is not None:
+        prob = 1.0 - _normal_cdf(outcome_low, forecast_value_f, uncertainty_std_f)
+    elif outcome_high is not None:
+        prob = _normal_cdf(outcome_high, forecast_value_f, uncertainty_std_f)
+    else:
+        return 0.0
+
+    return _clip_probability(prob)
+
+
+def calibration_model_path(
+    city: str,
+    market_type: str,
+    model_kind: str,
+    model_dir: Optional[Path | str] = None,
+) -> Path:
+    directory = Path(model_dir) if model_dir is not None else CALIBRATION_MODELS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{_slugify_city(city)}_{market_type}_{model_kind}.pkl"
+
+
+def _market_columns(market_type: str) -> tuple[str, str, str]:
+    if market_type not in {"high", "low"}:
+        raise ValueError(f"Unsupported market_type: {market_type}")
+
+    forecast_col = f"forecast_{market_type}_f"
+    actual_col = f"actual_{market_type}_f"
+    spread_col = f"ensemble_{market_type}_std_f"
+    return forecast_col, actual_col, spread_col
+
+
+def prepare_training_frame(df: pd.DataFrame, market_type: str) -> pd.DataFrame:
+    """Normalize training data into forecast/actual/spread columns."""
+    if {"forecast_f", "actual_f", "spread_f"}.issubset(df.columns):
+        frame = df[["forecast_f", "actual_f", "spread_f"]].copy()
+        frame["forecast_f"] = pd.to_numeric(frame["forecast_f"], errors="coerce")
+        frame["actual_f"] = pd.to_numeric(frame["actual_f"], errors="coerce")
+        frame["spread_f"] = pd.to_numeric(frame["spread_f"], errors="coerce")
+        frame = frame.dropna(subset=["forecast_f", "actual_f"]).copy()
+        if frame.empty:
+            return pd.DataFrame(columns=["forecast_f", "actual_f", "spread_f"])
+        spread_series = frame["spread_f"].dropna()
+        fallback_spread = float(spread_series.median()) if not spread_series.empty else _MIN_SPREAD_F
+        frame["spread_f"] = frame["spread_f"].fillna(fallback_spread).clip(lower=_MIN_SPREAD_F)
+        return frame.reset_index(drop=True)
+
+    forecast_col, actual_col, spread_col = _market_columns(market_type)
+    if forecast_col not in df.columns or actual_col not in df.columns:
+        return pd.DataFrame(columns=["forecast_f", "actual_f", "spread_f"])
+
+    frame = df.copy()
+    if spread_col not in frame.columns:
+        spread_col = "ensemble_std_f"
+
+    if spread_col not in frame.columns:
+        frame["spread_f"] = _MIN_SPREAD_F
+    else:
+        frame["spread_f"] = pd.to_numeric(frame[spread_col], errors="coerce")
+
+    frame["forecast_f"] = pd.to_numeric(frame[forecast_col], errors="coerce")
+    frame["actual_f"] = pd.to_numeric(frame[actual_col], errors="coerce")
+    frame = frame.dropna(subset=["forecast_f", "actual_f"]).copy()
+    if frame.empty:
+        return pd.DataFrame(columns=["forecast_f", "actual_f", "spread_f"])
+
+    spread_series = frame["spread_f"].dropna()
+    fallback_spread = float(spread_series.median()) if not spread_series.empty else _MIN_SPREAD_F
+    frame["spread_f"] = frame["spread_f"].fillna(fallback_spread).clip(lower=_MIN_SPREAD_F)
+
+    return frame[["forecast_f", "actual_f", "spread_f"]].reset_index(drop=True)
+
+
+@dataclass
+class EMOSCalibrator:
+    """Linear bias corrector: actual = a + b*forecast + c*spread."""
+
+    city: str
+    market_type: str
+    a: float = 0.0
+    b: float = 1.0
+    c: float = 0.0
+    training_rows: int = 0
+    is_fitted: bool = False
+
+    def fit(self, df: pd.DataFrame) -> "EMOSCalibrator":
+        training = prepare_training_frame(df, self.market_type)
+        if len(training) < 2:
+            raise ValueError(
+                f"Need at least 2 training rows for {self.city} {self.market_type} EMOS, got {len(training)}"
+            )
+
+        model = LinearRegression()
+        x = training[["forecast_f", "spread_f"]].to_numpy(dtype=float)
+        y = training["actual_f"].to_numpy(dtype=float)
+        model.fit(x, y)
+
+        self.a = float(model.intercept_)
+        self.b = float(model.coef_[0])
+        self.c = float(model.coef_[1]) if len(model.coef_) > 1 else 0.0
+        self.training_rows = int(len(training))
+        self.is_fitted = True
+        return self
+
+    def correct(self, forecast_f: float, spread_f: float) -> float:
+        if not self.is_fitted:
+            return float(forecast_f)
+        return float(self.a + self.b * forecast_f + self.c * max(float(spread_f), _MIN_SPREAD_F))
+
+    def save(self, path: Path | str) -> Path:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as f:
+            pickle.dump(self, f)
+        return target
+
+    @classmethod
+    def load(cls, path: Path | str) -> "EMOSCalibrator":
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+
+@dataclass
+class IsotonicCalibrator:
+    """Maps raw probabilities to calibrated probabilities."""
+
+    city: str
+    market_type: str
+    training_examples: int = 0
+    is_fitted: bool = False
+    _model: IsotonicRegression = field(
+        default_factory=lambda: IsotonicRegression(out_of_bounds="clip"),
+        repr=False,
+    )
+
+    def fit(self, raw_probs: np.ndarray, actual_outcomes: np.ndarray) -> "IsotonicCalibrator":
+        probs = np.asarray(raw_probs, dtype=float).reshape(-1)
+        outcomes = np.asarray(actual_outcomes, dtype=float).reshape(-1)
+        if probs.size < 10:
+            raise ValueError(
+                f"Need at least 10 isotonic examples for {self.city} {self.market_type}, got {probs.size}"
+            )
+        if len(np.unique(outcomes)) < 2:
+            raise ValueError(
+                f"Need both positive and negative outcomes for {self.city} {self.market_type} isotonic fit"
+            )
+
+        self._model.fit(probs, outcomes)
+        self.training_examples = int(probs.size)
+        self.is_fitted = True
+        return self
+
+    def calibrate(self, raw_prob: float) -> float:
+        if not self.is_fitted:
+            return _clip_probability(raw_prob)
+        calibrated = float(self._model.predict(np.asarray([raw_prob], dtype=float))[0])
+        return _clip_probability(calibrated)
+
+    def save(self, path: Path | str) -> Path:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as f:
+            pickle.dump(self, f)
+        return target
+
+    @classmethod
+    def load(cls, path: Path | str) -> "IsotonicCalibrator":
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+
+def build_isotonic_examples(
+    df: pd.DataFrame,
+    market_type: str,
+    emos_model: Optional[EMOSCalibrator] = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Derive yes/no calibration examples from historical forecast/actual pairs."""
+    training = prepare_training_frame(df, market_type)
+    if training.empty:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    raw_probs: list[float] = []
+    outcomes: list[float] = []
+
+    for row in training.itertuples(index=False):
+        corrected = emos_model.correct(row.forecast_f, row.spread_f) if emos_model else float(row.forecast_f)
+        spread_f = max(float(row.spread_f), _MIN_SPREAD_F)
+        actual_f = float(row.actual_f)
+
+        radius = max(4.0, spread_f * 2.0)
+        lower = int(math.floor(min(corrected, actual_f) - radius))
+        upper = int(math.ceil(max(corrected, actual_f) + radius))
+
+        for threshold in range(lower, upper + 1, 2):
+            if market_type == "high":
+                over_prob = _clip_probability(1.0 - _normal_cdf(threshold, corrected, spread_f))
+                over_outcome = 1.0 if actual_f >= threshold else 0.0
+            else:
+                over_prob = _clip_probability(_normal_cdf(threshold + 0.99, corrected, spread_f))
+                over_outcome = 1.0 if actual_f <= threshold else 0.0
+
+            raw_probs.append(over_prob)
+            outcomes.append(over_outcome)
+
+            bucket_low = threshold - 1.0
+            bucket_high = threshold + 1.0
+            bucket_prob = compute_temperature_probability(corrected, bucket_low, bucket_high, spread_f)
+            bucket_outcome = 1.0 if bucket_low <= actual_f <= bucket_high else 0.0
+            raw_probs.append(bucket_prob)
+            outcomes.append(bucket_outcome)
+
+    return np.asarray(raw_probs, dtype=float), np.asarray(outcomes, dtype=float)
+
+
+def train_city_models(
+    city: str,
+    training_df: pd.DataFrame,
+    *,
+    model_dir: Optional[Path | str] = None,
+    min_training_rows: int = 10,
+) -> dict[str, dict]:
+    """Train and persist EMOS/isotonic models for one city."""
+    results: dict[str, dict] = {}
+
+    for market_type in ("high", "low"):
+        prepared = prepare_training_frame(training_df, market_type)
+        outcome: dict[str, object] = {
+            "rows": int(len(prepared)),
+            "emos_path": None,
+            "isotonic_path": None,
+            "trained_emos": False,
+            "trained_isotonic": False,
+            "status": "skipped",
+            "reason": "",
+        }
+
+        if len(prepared) < min_training_rows:
+            outcome["reason"] = f"need at least {min_training_rows} overlapping rows"
+            results[market_type] = outcome
+            continue
+
+        emos = EMOSCalibrator(city=city, market_type=market_type).fit(prepared)
+        emos_path = calibration_model_path(city, market_type, "emos", model_dir=model_dir)
+        emos.save(emos_path)
+        outcome["trained_emos"] = True
+        outcome["emos_path"] = str(emos_path)
+
+        raw_probs, actual_outcomes = build_isotonic_examples(prepared, market_type, emos_model=emos)
+        if raw_probs.size >= 10 and len(np.unique(actual_outcomes)) >= 2:
+            isotonic = IsotonicCalibrator(city=city, market_type=market_type).fit(raw_probs, actual_outcomes)
+            isotonic_path = calibration_model_path(city, market_type, "isotonic", model_dir=model_dir)
+            isotonic.save(isotonic_path)
+            outcome["trained_isotonic"] = True
+            outcome["isotonic_path"] = str(isotonic_path)
+            outcome["isotonic_examples"] = int(raw_probs.size)
+            outcome["status"] = "trained"
+        else:
+            outcome["reason"] = "insufficient isotonic example diversity"
+            outcome["status"] = "trained_emos_only"
+
+        results[market_type] = outcome
+
+    return results
+
+
+class CalibrationManager:
+    """Load calibration models on demand and apply them in matcher flows."""
+
+    def __init__(self, model_dir: Optional[Path | str] = None):
+        self.model_dir = Path(model_dir) if model_dir is not None else CALIBRATION_MODELS_DIR
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        self._emos_cache: dict[tuple[str, str], Optional[EMOSCalibrator]] = {}
+        self._isotonic_cache: dict[tuple[str, str], Optional[IsotonicCalibrator]] = {}
+
+    def _load_emos(self, city: str, market_type: str) -> Optional[EMOSCalibrator]:
+        key = (city, market_type)
+        if key in self._emos_cache:
+            return self._emos_cache[key]
+
+        path = calibration_model_path(city, market_type, "emos", model_dir=self.model_dir)
+        if not path.exists():
+            self._emos_cache[key] = None
+            return None
+
+        try:
+            model = EMOSCalibrator.load(path)
+        except Exception as exc:
+            logger.warning("Failed loading EMOS model %s: %s", path, exc)
+            model = None
+
+        self._emos_cache[key] = model
+        return model
+
+    def _load_isotonic(self, city: str, market_type: str) -> Optional[IsotonicCalibrator]:
+        key = (city, market_type)
+        if key in self._isotonic_cache:
+            return self._isotonic_cache[key]
+
+        path = calibration_model_path(city, market_type, "isotonic", model_dir=self.model_dir)
+        if not path.exists():
+            self._isotonic_cache[key] = None
+            return None
+
+        try:
+            model = IsotonicCalibrator.load(path)
+        except Exception as exc:
+            logger.warning("Failed loading isotonic model %s: %s", path, exc)
+            model = None
+
+        self._isotonic_cache[key] = model
+        return model
+
+    def correct_forecast(
+        self,
+        city: str,
+        market_type: str,
+        forecast_f: float,
+        spread_f: float,
+    ) -> tuple[float, str]:
+        model = self._load_emos(city, market_type)
+        if not model or not model.is_fitted:
+            return float(forecast_f), "raw"
+        return float(model.correct(forecast_f, spread_f)), "emos"
+
+    def calibrate_probability(
+        self,
+        city: str,
+        market_type: str,
+        raw_prob: float,
+    ) -> tuple[float, str]:
+        model = self._load_isotonic(city, market_type)
+        if not model or not model.is_fitted:
+            return _clip_probability(raw_prob), "raw"
+        return model.calibrate(raw_prob), "isotonic"
+
+    def available_model_count(self) -> int:
+        return len(list(self.model_dir.glob("*.pkl")))

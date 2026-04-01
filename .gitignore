@@ -1,0 +1,21 @@
+.venv/
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local secrets
+config.json
+config.local.json
+api-credentials.txt
+*.pem
+*.key
+
+# Runtime artifacts
+data/hrrr_cache/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
