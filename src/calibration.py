@@ -22,12 +22,32 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LinearRegression
 
 from src.station_truth import CALIBRATION_MODELS_DIR, _slugify_city
+from src.ngr import NGRCalibrator
 
 logger = logging.getLogger("weather.calibration")
 
 _MIN_SPREAD_F = 1.0
 _MIN_PROB = 0.001
 _MAX_PROB = 0.999
+
+SELECTIVE_RAW_FALLBACK_SOURCE = "raw_selective_fallback"
+SELECTIVE_RAW_FALLBACK_TARGETS: tuple[tuple[str, str], ...] = (
+    ("Boston", "low"),
+    ("Minneapolis", "low"),
+    ("Philadelphia", "low"),
+    ("New Orleans", "high"),
+    ("San Francisco", "low"),
+)
+_SELECTIVE_RAW_FALLBACK_TARGET_SET = frozenset(
+    (" ".join(city.split()).casefold(), market_type.casefold())
+    for city, market_type in SELECTIVE_RAW_FALLBACK_TARGETS
+)
+
+
+def is_selective_raw_fallback_pair(city: str, market_type: str) -> bool:
+    normalized_city = " ".join(str(city).split()).casefold()
+    normalized_market_type = str(market_type).strip().casefold()
+    return (normalized_city, normalized_market_type) in _SELECTIVE_RAW_FALLBACK_TARGET_SET
 
 
 def _normal_cdf(x: float, mu: float, sigma: float) -> float:
@@ -282,8 +302,11 @@ def train_city_models(
             "rows": int(len(prepared)),
             "emos_path": None,
             "isotonic_path": None,
+            "ngr_path": None,
             "trained_emos": False,
             "trained_isotonic": False,
+            "trained_ngr": False,
+            "ngr_training_crps": None,
             "status": "skipped",
             "reason": "",
         }
@@ -311,6 +334,19 @@ def train_city_models(
         else:
             outcome["reason"] = "insufficient isotonic example diversity"
             outcome["status"] = "trained_emos_only"
+
+        # NGR uses the full training_df (needs date + lead columns)
+        try:
+            ngr_calibrator = NGRCalibrator(city=city, market_type=market_type).fit(
+                training_df, min_rows=20
+            )
+            ngr_path = calibration_model_path(city, market_type, "ngr", model_dir=model_dir)
+            ngr_calibrator.save(ngr_path)
+            outcome["trained_ngr"] = True
+            outcome["ngr_path"] = str(ngr_path)
+            outcome["ngr_training_crps"] = float(ngr_calibrator.training_crps)
+        except Exception as exc:
+            logger.warning("NGR fit skipped for %s %s: %s", city, market_type, exc)
 
         results[market_type] = outcome
 
@@ -389,3 +425,59 @@ class CalibrationManager:
 
     def available_model_count(self) -> int:
         return len(list(self.model_dir.glob("*.pkl")))
+
+    def _load_ngr(self, city: str, market_type: str) -> Optional[NGRCalibrator]:
+        key = (city, market_type)
+        if not hasattr(self, "_ngr_cache"):
+            self._ngr_cache: dict[tuple[str, str], Optional[NGRCalibrator]] = {}
+        if key in self._ngr_cache:
+            return self._ngr_cache[key]
+
+        path = calibration_model_path(city, market_type, "ngr", model_dir=self.model_dir)
+        if not path.exists():
+            self._ngr_cache[key] = None
+            return None
+        try:
+            model = NGRCalibrator.load(path)
+        except Exception as exc:
+            logger.warning("Failed loading NGR model %s: %s", path, exc)
+            model = None
+        self._ngr_cache[key] = model
+        return model
+
+    def predict_distribution(
+        self,
+        city: str,
+        market_type: str,
+        forecast_f: float,
+        spread_f: float,
+        lead_h: float,
+        doy: int,
+    ) -> tuple[float, float, str]:
+        """Return (mu, sigma, source) for the probability computation.
+
+        Source ordering (first applicable):
+          - raw_selective_fallback — pair in selective list; uses raw mu, NGR sigma if available
+          - ngr — use NGR predictive distribution
+          - emos — fall back to legacy EMOS (mu only); sigma = max(spread_f, 1.0)
+          - raw — no models available; return forecast + max(spread_f, 1.0)
+        """
+        selective = is_selective_raw_fallback_pair(city, market_type)
+
+        ngr_model = self._load_ngr(city, market_type)
+        if ngr_model is not None and ngr_model.is_fitted:
+            mu_ngr, sigma_ngr = ngr_model.predict(forecast_f, spread_f, lead_h, doy)
+            if selective:
+                # Keep raw mu but take NGR sigma for better uncertainty
+                return float(forecast_f), float(sigma_ngr), SELECTIVE_RAW_FALLBACK_SOURCE
+            return float(mu_ngr), float(sigma_ngr), "ngr"
+
+        # No NGR — try legacy EMOS for mu
+        emos_model = self._load_emos(city, market_type)
+        if emos_model is not None and emos_model.is_fitted:
+            if selective:
+                return float(forecast_f), max(float(spread_f), 1.0), SELECTIVE_RAW_FALLBACK_SOURCE
+            return float(emos_model.correct(forecast_f, spread_f)), max(float(spread_f), 1.0), "emos"
+
+        # Nothing — raw passthrough
+        return float(forecast_f), max(float(spread_f), 1.0), "raw"

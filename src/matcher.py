@@ -232,6 +232,33 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
         return None
 
 
+def _doy_from_date(target_date: Optional[str], fallback_now: Optional[datetime] = None) -> int:
+    """Return day-of-year (1–366) for an ISO date string.
+
+    On parse failure, falls back to today's DOY (seasonally current) rather
+    than 1 so that NGR's sin/cos(doy) features aren't silently biased to
+    Jan 1 when a date string is malformed.
+    """
+    if target_date:
+        try:
+            return datetime.fromisoformat(target_date).timetuple().tm_yday
+        except ValueError:
+            logger.debug("Could not parse DOY from %r, falling back to today", target_date)
+    now = fallback_now or datetime.now(timezone.utc)
+    return now.timetuple().tm_yday
+
+
+def _lead_hours(close_time: str, now_utc: Optional[datetime]) -> float:
+    """Return hours from now_utc to close_time; floor at 0.0; default 24.0 on parse failure."""
+    close_dt = _parse_iso_datetime(close_time)
+    if close_dt is None:
+        return 24.0
+    current = now_utc or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return max(0.0, (close_dt.astimezone(timezone.utc) - current.astimezone(timezone.utc)).total_seconds() / 3600.0)
+
+
 def _apply_hrrr_blend(
     hrrr_data: Optional[dict],
     city: str,
@@ -290,6 +317,7 @@ def match_kalshi_markets(
     hrrr_data: Optional[dict] = None,
     hrrr_blend_horizon_hours: float = 18.0,
     now_utc: Optional[datetime] = None,
+    use_ngr_calibration: bool = False,
 ) -> list[dict]:
     """Match forecasts against Kalshi weather markets."""
     opps = []
@@ -328,7 +356,7 @@ def match_kalshi_markets(
         else:
             continue
 
-        sigma_f, sigma_source = _resolve_temperature_uncertainty(
+        ensemble_sigma_f, sigma_source = _resolve_temperature_uncertainty(
             ensemble_data,
             city,
             market_date,
@@ -348,13 +376,21 @@ def match_kalshi_markets(
             now_utc,
         )
 
-        forecast_value, forecast_calibration_source = _apply_calibration(
-            calibration_manager,
-            city,
-            mtype,
-            raw_forecast_value,
-            sigma_f,
-        )
+        if use_ngr_calibration and calibration_manager is not None:
+            lead_h = _lead_hours(str(m.get("close_time", "")), now_utc)
+            doy = _doy_from_date(market_date)
+            forecast_value, sigma_f, forecast_calibration_source = calibration_manager.predict_distribution(
+                city, mtype, raw_forecast_value, ensemble_sigma_f, lead_h, doy,
+            )
+        else:
+            sigma_f = ensemble_sigma_f
+            forecast_value, forecast_calibration_source = _apply_calibration(
+                calibration_manager,
+                city,
+                mtype,
+                raw_forecast_value,
+                sigma_f,
+            )
 
         if is_bucket:
             bucket_low = threshold - 1.0
@@ -455,6 +491,7 @@ def match_polymarket_markets(
     hrrr_data: Optional[dict] = None,
     hrrr_blend_horizon_hours: float = 18.0,
     now_utc: Optional[datetime] = None,
+    use_ngr_calibration: bool = False,
 ) -> list[dict]:
     """Match forecasts against Polymarket weather markets."""
     from src.fetch_polymarket import _parse_outcome_range
@@ -497,7 +534,7 @@ def match_polymarket_markets(
         else:
             continue
 
-        sigma_f, sigma_source = _resolve_temperature_uncertainty(
+        ensemble_sigma_f, sigma_source = _resolve_temperature_uncertainty(
             ensemble_data,
             city,
             today_str,
@@ -517,6 +554,17 @@ def match_polymarket_markets(
             now_utc,
         )
 
+        if use_ngr_calibration and calibration_manager is not None:
+            lead_h = _lead_hours(str(market.get("endDate", "")), now_utc)
+            doy = _doy_from_date(today_str)
+            poly_forecast_value, sigma_f, poly_forecast_calibration_source = calibration_manager.predict_distribution(
+                city, sigma_market_type, raw_forecast_value, ensemble_sigma_f, lead_h, doy,
+            )
+        else:
+            sigma_f = ensemble_sigma_f
+            poly_forecast_value = None  # resolved per outcome below
+            poly_forecast_calibration_source = None
+
         outcomes = market.get("outcomes", [])
         prices = market.get("outcomePrices", [])
         if not outcomes or not prices or len(outcomes) != len(prices):
@@ -527,13 +575,17 @@ def match_polymarket_markets(
             if low is None and high is None:
                 continue
 
-            forecast_value, forecast_calibration_source = _apply_calibration(
-                calibration_manager,
-                city,
-                sigma_market_type,
-                raw_forecast_value,
-                sigma_f,
-            )
+            if use_ngr_calibration and calibration_manager is not None:
+                forecast_value = poly_forecast_value
+                forecast_calibration_source = poly_forecast_calibration_source
+            else:
+                forecast_value, forecast_calibration_source = _apply_calibration(
+                    calibration_manager,
+                    city,
+                    sigma_market_type,
+                    raw_forecast_value,
+                    sigma_f,
+                )
             raw_prob = compute_temperature_probability(forecast_value, low, high, sigma_f)
             our_prob = raw_prob
             probability_calibration_source = "raw"
@@ -593,6 +645,7 @@ def scan_all(
     hrrr_data: Optional[dict] = None,
     hrrr_blend_horizon_hours: float = 18.0,
     now_utc: Optional[datetime] = None,
+    use_ngr_calibration: bool = False,
 ) -> list[dict]:
     all_opps = []
 
@@ -608,6 +661,7 @@ def scan_all(
                 hrrr_data=hrrr_data,
                 hrrr_blend_horizon_hours=hrrr_blend_horizon_hours,
                 now_utc=now_utc,
+                use_ngr_calibration=use_ngr_calibration,
             )
         )
 
@@ -623,6 +677,7 @@ def scan_all(
                 hrrr_data=hrrr_data,
                 hrrr_blend_horizon_hours=hrrr_blend_horizon_hours,
                 now_utc=now_utc,
+                use_ngr_calibration=use_ngr_calibration,
             )
         )
 

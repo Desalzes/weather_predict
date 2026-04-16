@@ -63,6 +63,7 @@ def main() -> None:
 
     total_city_models = 0
     total_isotonic_models = 0
+    total_ngr_models = 0
     skipped_cities = 0
 
     log.info("Training calibration models for %d cities (window=%d days)...", len(cities), days)
@@ -89,6 +90,7 @@ def main() -> None:
 
         city_trained = 0
         city_isotonic = 0
+        city_ngr = 0
         for market_type, outcome in results.items():
             if outcome.get("trained_emos"):
                 city_trained += 1
@@ -96,13 +98,17 @@ def main() -> None:
             if outcome.get("trained_isotonic"):
                 city_isotonic += 1
                 total_isotonic_models += 1
+            if outcome.get("trained_ngr"):
+                city_ngr += 1
+                total_ngr_models += 1
 
             log.info(
-                "%s %s: status=%s rows=%s reason=%s",
+                "%s %s: status=%s rows=%s ngr_crps=%s reason=%s",
                 city,
                 market_type,
                 outcome.get("status"),
                 outcome.get("rows"),
+                outcome.get("ngr_training_crps"),
                 outcome.get("reason", ""),
             )
 
@@ -110,13 +116,14 @@ def main() -> None:
             skipped_cities += 1
             log.info("%s: insufficient overlapping rows for training", city)
         else:
-            log.info("%s: trained %d EMOS model(s), %d isotonic model(s)", city, city_trained, city_isotonic)
+            log.info(
+                "%s: trained %d EMOS, %d isotonic, %d NGR",
+                city, city_trained, city_isotonic, city_ngr,
+            )
 
     log.info(
-        "Training complete: %d EMOS model(s), %d isotonic model(s), %d city/cities skipped",
-        total_city_models,
-        total_isotonic_models,
-        skipped_cities,
+        "Training complete: %d EMOS, %d isotonic, %d NGR, %d skipped",
+        total_city_models, total_isotonic_models, total_ngr_models, skipped_cities,
     )
 
 

@@ -271,6 +271,7 @@ def run_scan(
                 hrrr_data=kalshi_hrrr_data,
                 hrrr_blend_horizon_hours=hrrr_blend_horizon_hours,
                 now_utc=now_utc,
+                use_ngr_calibration=bool(config.get("use_ngr_calibration", False)),
             )
             all_opportunities.extend(kalshi_opps)
             log.info("Kalshi: %d opportunities with edge >= %.0f%%", len(kalshi_opps), min_edge * 100)
@@ -291,6 +292,7 @@ def run_scan(
                 hrrr_data=poly_hrrr_data,
                 hrrr_blend_horizon_hours=hrrr_blend_horizon_hours,
                 now_utc=now_utc,
+                use_ngr_calibration=bool(config.get("use_ngr_calibration", False)),
             )
             all_opportunities.extend(poly_opps)
             log.info("Polymarket: %d opportunities with edge >= %.0f%%", len(poly_opps), min_edge * 100)
@@ -298,6 +300,17 @@ def run_scan(
             log.warning("Polymarket match failed: %s", exc)
 
     all_opportunities.sort(key=lambda x: x.get("abs_edge", 0), reverse=True)
+
+    if config.get("opportunity_archive_enabled", True):
+        try:
+            from src.opportunity_log import log_opportunities
+            log_opportunities(
+                scan_id=timestamp,
+                opportunities=all_opportunities,
+                archive_dir=config.get("opportunity_archive_dir", "data/opportunity_archive"),
+            )
+        except Exception as exc:
+            log.warning("Opportunity archive write failed: %s", exc)
 
     from src.matcher import format_report
     report = format_report(all_opportunities)
