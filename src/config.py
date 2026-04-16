@@ -22,11 +22,23 @@ def resolve_config_path(config_path: str | os.PathLike | None = None) -> Path:
     return EXAMPLE_CONFIG_PATH
 
 
-def load_app_config(config_path: str | os.PathLike | None = None) -> dict:
-    """Load JSON config, falling back to the committed example file."""
-    resolved = resolve_config_path(config_path)
-    with resolved.open("r", encoding="utf-8") as handle:
+def _load_json_object(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def load_app_config(config_path: str | os.PathLike | None = None) -> dict:
+    """Load JSON config with committed example defaults for missing keys."""
+    resolved = resolve_config_path(config_path)
+    config = _load_json_object(resolved)
+
+    if resolved == EXAMPLE_CONFIG_PATH or not EXAMPLE_CONFIG_PATH.exists():
+        return config
+
+    defaults = _load_json_object(EXAMPLE_CONFIG_PATH)
+    merged = defaults.copy()
+    merged.update(config)
+    return merged
 
 
 def _config_value(name: str, default: str = "") -> str:

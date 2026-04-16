@@ -361,3 +361,13 @@ date,tmax_f,tmin_f,precip_in,precip_trace,cli_station,source_url,city,source,arc
 2026-03-26,63.0,41.0,,False,BOS,https://forecast.weather.gov/product.php?site=NWS&issuedby=BOS&product=CLI&version=6&format=txt&glossary=0,Boston,cli_archive,6.0
 2026-03-27,55.0,41.0,,False,BOS,https://forecast.weather.gov/product.php?site=NWS&issuedby=BOS&product=CLI&version=4&format=txt&glossary=0,Boston,cli_archive,4.0
 2026-03-28,38.0,27.0,,False,BOS,https://forecast.weather.gov/product.php?site=NWS&issuedby=BOS&product=CLI&version=2&format=txt&glossary=0,Boston,cli_archive,2.0
+2026-04-03,55.0,38.0,,False,BOS,https://forecast.weather.gov/product.php?site=NWS&issuedby=BOS&product=CLI&version=1&format=txt&glossary=0,Boston,cli_archive,1.0
+2026-04-04,62.06,37.94,,,,,Boston,cdo,
+2026-04-05,57.02,39.92,,,,,Boston,cdo,
+2026-04-06,51.08,37.94,,,,,Boston,cdo,
+2026-04-07,46.04,33.08,,,,,Boston,cdo,
+2026-04-08,39.92,28.94,,,,,Boston,cdo,
+2026-04-09,57.92,30.92,,,,,Boston,cdo,
+2026-04-10,69.08,37.04,,,,,Boston,cdo,
+2026-04-11,60.08,44.06,,,,,Boston,cdo,
+2026-04-12,50.0,39.92,,,,,Boston,cdo,

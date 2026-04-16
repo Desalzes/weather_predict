@@ -44,9 +44,41 @@ _EMPTY_TRAINING_COLUMNS = [
     "ensemble_std_f",
     "ensemble_high_std_f",
     "ensemble_low_std_f",
-    "as_of_utc",
     "forecast_lead_days",
+    "as_of_utc",
 ]
+
+
+def _prepare_forecast_archive_frame(forecasts: pd.DataFrame) -> pd.DataFrame:
+    """Normalize archived forecast metadata before training joins."""
+    frame = forecasts.copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame["as_of_utc"] = pd.to_datetime(
+        frame["as_of_utc"],
+        utc=True,
+        errors="coerce",
+        format="ISO8601",
+    )
+
+    if "forecast_source" not in frame.columns:
+        frame["forecast_source"] = "live_scan"
+    else:
+        frame["forecast_source"] = frame["forecast_source"].fillna("").astype(str).str.strip()
+        frame.loc[frame["forecast_source"] == "", "forecast_source"] = "live_scan"
+
+    if "forecast_lead_days" not in frame.columns:
+        frame["forecast_lead_days"] = pd.NA
+    frame["forecast_lead_days"] = pd.to_numeric(frame["forecast_lead_days"], errors="coerce")
+
+    # Prefer explicit previous-run forecasts and ignore later same-day scans that
+    # can leak settlement information into the calibration set.
+    frame["training_priority"] = 0
+    previous_run_mask = (
+        frame["forecast_source"].eq("open_meteo_previous_runs")
+        | frame["forecast_lead_days"].ge(1).fillna(False)
+    )
+    frame.loc[previous_run_mask, "training_priority"] = 1
+    return frame
 
 
 def ensure_data_directories() -> dict[str, Path]:
@@ -502,6 +534,7 @@ def archive_forecast_snapshot(
             "forecast_low_f": round(min(temps_f), 2),
             "ensemble_high_std_f": _member_spread_for_date(ensemble_forecast, target_date, "high"),
             "ensemble_low_std_f": _member_spread_for_date(ensemble_forecast, target_date, "low"),
+            "forecast_source": "live_scan",
         })
 
     if not rows:
@@ -609,16 +642,17 @@ def build_training_set(
         return pd.DataFrame(columns=_EMPTY_TRAINING_COLUMNS)
 
     actuals = pd.read_csv(actuals_file)
-    forecasts = pd.read_csv(archive_file)
+    forecasts = _prepare_forecast_archive_frame(pd.read_csv(archive_file))
     if actuals.empty or forecasts.empty:
         return pd.DataFrame(columns=_EMPTY_TRAINING_COLUMNS)
 
     actuals["date"] = pd.to_datetime(actuals["date"])
-    forecasts["date"] = pd.to_datetime(forecasts["date"])
-    forecasts["as_of_utc"] = pd.to_datetime(forecasts["as_of_utc"], utc=True, errors="coerce")
+    forecasts = forecasts.loc[forecasts["training_priority"] > 0].copy()
+    if forecasts.empty:
+        return pd.DataFrame(columns=_EMPTY_TRAINING_COLUMNS)
 
     latest_forecast = (
-        forecasts.sort_values(["date", "as_of_utc"])
+        forecasts.sort_values(["date", "training_priority", "as_of_utc"])
         .drop_duplicates(subset=["date"], keep="last")
         .copy()
     )
@@ -647,5 +681,6 @@ def build_training_set(
     columns = _EMPTY_TRAINING_COLUMNS.copy()
     result = merged[columns].copy()
     result["date"] = result["date"].dt.date.astype(str)
+    result["forecast_lead_days"] = pd.to_numeric(result["forecast_lead_days"], errors="coerce").astype("Int64")
     result["as_of_utc"] = result["as_of_utc"].astype(str)
     return result.reset_index(drop=True)

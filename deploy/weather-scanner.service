@@ -1,0 +1,16 @@
+[Unit]
+Description=Weather Signals - Market Opportunity Scanner (single scan)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/weather
+ExecStart=/opt/weather/.venv/bin/python main.py --once
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600
+
+# Prevent concurrent runs
+Nice=10

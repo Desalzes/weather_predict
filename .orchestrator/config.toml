@@ -1,0 +1,29 @@
+[project]
+name = "weather"
+primary_provider = "codex"
+secondary_provider = "claude"
+default_base_branch = "main"
+
+[routing]
+default_mode = "auto"
+prefer_secondary_for_review = true
+
+[memory]
+enabled = true
+max_prompt_memories = 8
+max_directives = 6
+
+[worktrees]
+enabled = true
+root_mode = "adjacent"
+prefix = "__wt__"
+
+[providers.claude]
+enabled = true
+command = "claude"
+model = ""
+
+[providers.codex]
+enabled = true
+command = "codex.cmd"
+model = ""

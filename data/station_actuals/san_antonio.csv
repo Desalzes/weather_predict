@@ -361,3 +361,4 @@ date,tmax_f,tmin_f,precip_in,precip_trace,cli_station,source_url,city,source,arc
 2026-03-26,70.0,69.0,,False,SAT,https://forecast.weather.gov/product.php?site=NWS&issuedby=SAT&product=CLI&version=13&format=txt&glossary=0,San Antonio,cli_archive,13.0
 2026-03-27,69.0,66.0,,False,SAT,https://forecast.weather.gov/product.php?site=NWS&issuedby=SAT&product=CLI&version=9&format=txt&glossary=0,San Antonio,cli_archive,9.0
 2026-03-28,57.0,57.0,,False,SAT,https://forecast.weather.gov/product.php?site=NWS&issuedby=SAT&product=CLI&version=5&format=txt&glossary=0,San Antonio,cli_archive,5.0
+2026-04-04,74.0,72.0,,False,SAT,https://forecast.weather.gov/product.php?site=NWS&issuedby=SAT&product=CLI&version=49&format=txt&glossary=0,San Antonio,cli_archive,49.0

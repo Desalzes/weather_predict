@@ -361,3 +361,4 @@ date,tmax_f,tmin_f,precip_in,precip_trace,cli_station,source_url,city,source,arc
 2026-03-26,99.0,67.0,,False,PHX,https://forecast.weather.gov/product.php?site=NWS&issuedby=PHX&product=CLI&version=6&format=txt&glossary=0,Phoenix,cli_archive,6.0
 2026-03-27,,69.0,,False,PHX,https://forecast.weather.gov/product.php?site=NWS&issuedby=PHX&product=CLI&version=4&format=txt&glossary=0,Phoenix,cli_archive,4.0
 2026-03-28,,75.0,,False,PHX,https://forecast.weather.gov/product.php?site=NWS&issuedby=PHX&product=CLI&version=2&format=txt&glossary=0,Phoenix,cli_archive,2.0
+2026-04-03,88.0,64.0,,False,PHX,https://forecast.weather.gov/product.php?site=NWS&issuedby=PHX&product=CLI&version=1&format=txt&glossary=0,Phoenix,cli_archive,1.0

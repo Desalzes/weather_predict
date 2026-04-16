@@ -29,7 +29,6 @@ logger = logging.getLogger("weather.calibration")
 _MIN_SPREAD_F = 1.0
 _MIN_PROB = 0.001
 _MAX_PROB = 0.999
-
 SELECTIVE_RAW_FALLBACK_SOURCE = "raw_selective_fallback"
 SELECTIVE_RAW_FALLBACK_TARGETS: tuple[tuple[str, str], ...] = (
     ("Boston", "low"),
@@ -44,10 +43,32 @@ _SELECTIVE_RAW_FALLBACK_TARGET_SET = frozenset(
 )
 
 
-def is_selective_raw_fallback_pair(city: str, market_type: str) -> bool:
-    normalized_city = " ".join(str(city).split()).casefold()
-    normalized_market_type = str(market_type).strip().casefold()
-    return (normalized_city, normalized_market_type) in _SELECTIVE_RAW_FALLBACK_TARGET_SET
+def configure_calibration_constants(
+    min_spread_f: float | None = None,
+    selective_raw_fallback_targets: list | None = None,
+) -> None:
+    """Override module-level calibration constants from config at startup."""
+    global _MIN_SPREAD_F, SELECTIVE_RAW_FALLBACK_TARGETS, _SELECTIVE_RAW_FALLBACK_TARGET_SET
+    if min_spread_f is not None:
+        _MIN_SPREAD_F = float(min_spread_f)
+    if selective_raw_fallback_targets is not None:
+        SELECTIVE_RAW_FALLBACK_TARGETS = tuple(
+            (str(pair[0]), str(pair[1])) for pair in selective_raw_fallback_targets
+        )
+        _SELECTIVE_RAW_FALLBACK_TARGET_SET = frozenset(
+            (" ".join(city.split()).casefold(), market_type.casefold())
+            for city, market_type in SELECTIVE_RAW_FALLBACK_TARGETS
+        )
+
+
+def _bucket_bounds_from_bucket_start(bucket_start: float) -> tuple[float, float]:
+    """Return the continuous bounds for a Kalshi-style 2-degree bucket.
+
+    A market like ``B66.5`` settles to the integer pair ``66-67``. During
+    training we represent that same event using the lower bucket integer.
+    """
+    start = float(bucket_start)
+    return start - 0.5, start + 1.5
 
 
 def _normal_cdf(x: float, mu: float, sigma: float) -> float:
@@ -58,6 +79,12 @@ def _normal_cdf(x: float, mu: float, sigma: float) -> float:
 
 def _clip_probability(value: float) -> float:
     return max(_MIN_PROB, min(_MAX_PROB, float(value)))
+
+
+def is_selective_raw_fallback_pair(city: str, market_type: str) -> bool:
+    normalized_city = " ".join(str(city).split()).casefold()
+    normalized_market_type = str(market_type).strip().casefold()
+    return (normalized_city, normalized_market_type) in _SELECTIVE_RAW_FALLBACK_TARGET_SET
 
 
 def compute_temperature_probability(
@@ -276,8 +303,7 @@ def build_isotonic_examples(
             raw_probs.append(over_prob)
             outcomes.append(over_outcome)
 
-            bucket_low = threshold - 1.0
-            bucket_high = threshold + 1.0
+            bucket_low, bucket_high = _bucket_bounds_from_bucket_start(threshold)
             bucket_prob = compute_temperature_probability(corrected, bucket_low, bucket_high, spread_f)
             bucket_outcome = 1.0 if bucket_low <= actual_f <= bucket_high else 0.0
             raw_probs.append(bucket_prob)
@@ -400,6 +426,59 @@ class CalibrationManager:
         self._isotonic_cache[key] = model
         return model
 
+    def _load_ngr(self, city: str, market_type: str) -> Optional[NGRCalibrator]:
+        key = (city, market_type)
+        if not hasattr(self, "_ngr_cache"):
+            self._ngr_cache = {}
+        if key in self._ngr_cache:
+            return self._ngr_cache[key]
+
+        path = calibration_model_path(city, market_type, "ngr", model_dir=self.model_dir)
+        if not path.exists():
+            self._ngr_cache[key] = None
+            return None
+
+        try:
+            model = NGRCalibrator.load(path)
+        except Exception as exc:
+            logger.warning("Failed loading NGR model %s: %s", path, exc)
+            model = None
+
+        self._ngr_cache[key] = model
+        return model
+
+    def predict_distribution(
+        self,
+        city: str,
+        market_type: str,
+        forecast_f: float,
+        spread_f: float,
+        lead_h: float,
+        doy: int,
+    ) -> tuple[float, float, str]:
+        """Return (mu, sigma, source) for probability computation.
+
+        Priority: selective_raw_fallback + NGR σ → NGR → selective + EMOS →
+        EMOS → raw. Selective-fallback pairs keep raw mu but take NGR σ when
+        available so uncertainty is still calibrated.
+        """
+        selective = is_selective_raw_fallback_pair(city, market_type)
+
+        ngr_model = self._load_ngr(city, market_type)
+        if ngr_model is not None and ngr_model.is_fitted:
+            mu_ngr, sigma_ngr = ngr_model.predict(forecast_f, spread_f, lead_h, doy)
+            if selective:
+                return float(forecast_f), float(sigma_ngr), SELECTIVE_RAW_FALLBACK_SOURCE
+            return float(mu_ngr), float(sigma_ngr), "ngr"
+
+        emos_model = self._load_emos(city, market_type)
+        if emos_model is not None and emos_model.is_fitted:
+            if selective:
+                return float(forecast_f), max(float(spread_f), 1.0), SELECTIVE_RAW_FALLBACK_SOURCE
+            return float(emos_model.correct(forecast_f, spread_f)), max(float(spread_f), 1.0), "emos"
+
+        return float(forecast_f), max(float(spread_f), 1.0), "raw"
+
     def correct_forecast(
         self,
         city: str,
@@ -410,6 +489,8 @@ class CalibrationManager:
         model = self._load_emos(city, market_type)
         if not model or not model.is_fitted:
             return float(forecast_f), "raw"
+        if is_selective_raw_fallback_pair(city, market_type):
+            return float(forecast_f), SELECTIVE_RAW_FALLBACK_SOURCE
         return float(model.correct(forecast_f, spread_f)), "emos"
 
     def calibrate_probability(
@@ -425,59 +506,3 @@ class CalibrationManager:
 
     def available_model_count(self) -> int:
         return len(list(self.model_dir.glob("*.pkl")))
-
-    def _load_ngr(self, city: str, market_type: str) -> Optional[NGRCalibrator]:
-        key = (city, market_type)
-        if not hasattr(self, "_ngr_cache"):
-            self._ngr_cache: dict[tuple[str, str], Optional[NGRCalibrator]] = {}
-        if key in self._ngr_cache:
-            return self._ngr_cache[key]
-
-        path = calibration_model_path(city, market_type, "ngr", model_dir=self.model_dir)
-        if not path.exists():
-            self._ngr_cache[key] = None
-            return None
-        try:
-            model = NGRCalibrator.load(path)
-        except Exception as exc:
-            logger.warning("Failed loading NGR model %s: %s", path, exc)
-            model = None
-        self._ngr_cache[key] = model
-        return model
-
-    def predict_distribution(
-        self,
-        city: str,
-        market_type: str,
-        forecast_f: float,
-        spread_f: float,
-        lead_h: float,
-        doy: int,
-    ) -> tuple[float, float, str]:
-        """Return (mu, sigma, source) for the probability computation.
-
-        Source ordering (first applicable):
-          - raw_selective_fallback — pair in selective list; uses raw mu, NGR sigma if available
-          - ngr — use NGR predictive distribution
-          - emos — fall back to legacy EMOS (mu only); sigma = max(spread_f, 1.0)
-          - raw — no models available; return forecast + max(spread_f, 1.0)
-        """
-        selective = is_selective_raw_fallback_pair(city, market_type)
-
-        ngr_model = self._load_ngr(city, market_type)
-        if ngr_model is not None and ngr_model.is_fitted:
-            mu_ngr, sigma_ngr = ngr_model.predict(forecast_f, spread_f, lead_h, doy)
-            if selective:
-                # Keep raw mu but take NGR sigma for better uncertainty
-                return float(forecast_f), float(sigma_ngr), SELECTIVE_RAW_FALLBACK_SOURCE
-            return float(mu_ngr), float(sigma_ngr), "ngr"
-
-        # No NGR — try legacy EMOS for mu
-        emos_model = self._load_emos(city, market_type)
-        if emos_model is not None and emos_model.is_fitted:
-            if selective:
-                return float(forecast_f), max(float(spread_f), 1.0), SELECTIVE_RAW_FALLBACK_SOURCE
-            return float(emos_model.correct(forecast_f, spread_f)), max(float(spread_f), 1.0), "emos"
-
-        # Nothing — raw passthrough
-        return float(forecast_f), max(float(spread_f), 1.0), "raw"

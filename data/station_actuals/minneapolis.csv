@@ -361,3 +361,4 @@ date,tmax_f,tmin_f,precip_in,precip_trace,cli_station,source_url,city,source,arc
 2026-03-26,57.0,41.0,,False,MSP,https://forecast.weather.gov/product.php?site=NWS&issuedby=MSP&product=CLI&version=9&format=txt&glossary=0,Minneapolis,cli_archive,9.0
 2026-03-27,39.0,26.0,,False,MSP,https://forecast.weather.gov/product.php?site=NWS&issuedby=MSP&product=CLI&version=6&format=txt&glossary=0,Minneapolis,cli_archive,6.0
 2026-03-28,54.0,21.0,,False,MSP,https://forecast.weather.gov/product.php?site=NWS&issuedby=MSP&product=CLI&version=3&format=txt&glossary=0,Minneapolis,cli_archive,3.0
+2026-04-03,40.0,32.0,,False,MSP,https://forecast.weather.gov/product.php?site=NWS&issuedby=MSP&product=CLI&version=1&format=txt&glossary=0,Minneapolis,cli_archive,1.0

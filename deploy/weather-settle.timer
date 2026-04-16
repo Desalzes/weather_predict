@@ -1,0 +1,10 @@
+[Unit]
+Description=Settle Weather Paper Trades daily at 6am UTC
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

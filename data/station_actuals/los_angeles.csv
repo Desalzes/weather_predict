@@ -361,3 +361,12 @@ date,tmax_f,tmin_f,precip_in,precip_trace,cli_station,source_url,city,source,arc
 2026-03-26,73.0,59.0,,False,LAX,https://forecast.weather.gov/product.php?site=NWS&issuedby=LAX&product=CLI&version=7&format=txt&glossary=0,Los Angeles,cli_archive,7.0
 2026-03-27,71.0,59.0,,False,LAX,https://forecast.weather.gov/product.php?site=NWS&issuedby=LAX&product=CLI&version=5&format=txt&glossary=0,Los Angeles,cli_archive,5.0
 2026-03-28,68.0,58.0,,False,LAX,https://forecast.weather.gov/product.php?site=NWS&issuedby=LAX&product=CLI&version=2&format=txt&glossary=0,Los Angeles,cli_archive,2.0
+2026-04-04,87.08,55.94,,,,,Los Angeles,cdo,
+2026-04-05,78.08,57.02,,,,,Los Angeles,cdo,
+2026-04-06,78.08,60.98,,,,,Los Angeles,cdo,
+2026-04-07,69.98,57.92,,,,,Los Angeles,cdo,
+2026-04-08,71.06,57.92,,,,,Los Angeles,cdo,
+2026-04-09,71.96,60.08,,,,,Los Angeles,cdo,
+2026-04-10,66.92,59.0,,,,,Los Angeles,cdo,
+2026-04-11,69.08,59.0,,,,,Los Angeles,cdo,
+2026-04-12,69.08,57.92,,,,,Los Angeles,cdo,

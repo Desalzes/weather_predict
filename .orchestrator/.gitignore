@@ -1,0 +1,6 @@
+state.sqlite
+runtime/logs/
+runtime/pids/
+runtime/transcripts/
+runtime/sessions/
+memory/exports/

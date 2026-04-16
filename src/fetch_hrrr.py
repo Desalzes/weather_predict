@@ -23,6 +23,9 @@ logger = logging.getLogger("weather.hrrr")
 _TMP_SEARCH = ":TMP:2 m"
 _DEFAULT_AVAILABILITY_LAG_HOURS = 2
 _DEFAULT_SAVE_DIR = Path(__file__).resolve().parents[1] / "data" / "hrrr_cache"
+_DEFAULT_TIMEOUT_SECONDS = 300
+_DEFAULT_MAX_RETRIES_PER_HOUR = 2
+_DEFAULT_RETRY_DELAY_SECONDS = 5
 _MULTI_CACHE: dict[str, object] = {
     "run_time": None,
     "fxx": -1,
@@ -203,11 +206,26 @@ def fetch_hrrr_multi(
     *,
     now: Optional[datetime] = None,
     init_time: Optional[datetime] = None,
+    timeout_seconds: Optional[int] = None,
+    max_retries_per_hour: Optional[int] = None,
+    retry_delay_seconds: Optional[float] = None,
 ) -> dict:
-    """Fetch HRRR point forecasts for multiple named locations."""
+    """Fetch HRRR point forecasts for multiple named locations.
+
+    Args:
+        timeout_seconds: Overall timeout for the entire fetch. Default 300s.
+        max_retries_per_hour: Retries per lead hour on transient failure. Default 2.
+        retry_delay_seconds: Delay between retries. Default 5s.
+    """
+    import time as _time
+
     results = {}
     if not locations:
         return results
+
+    timeout = int(timeout_seconds or _DEFAULT_TIMEOUT_SECONDS)
+    retries = int(max_retries_per_hour if max_retries_per_hour is not None else _DEFAULT_MAX_RETRIES_PER_HOUR)
+    retry_delay = float(retry_delay_seconds if retry_delay_seconds is not None else _DEFAULT_RETRY_DELAY_SECONDS)
 
     Herbie = _get_herbie_class()
     run_time = _to_utc(init_time) if init_time is not None else _resolve_init_time(now=now)
@@ -239,13 +257,43 @@ def fetch_hrrr_multi(
             "location": {"lat": loc["lat"], "lon": loc["lon"]},
         }
 
+    deadline = _time.monotonic() + timeout
+    consecutive_failures = 0
+
     for lead_hour in range(0, max(0, int(fxx)) + 1):
-        try:
-            scalars, units = _fetch_hrrr_point_values(Herbie, run_time, points, lead_hour)
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            logger.debug("HRRR fetch failed for f%02d: %s", lead_hour, exc)
+        if _time.monotonic() > deadline:
+            logger.warning(
+                "HRRR fetch timed out after %ds at f%02d/%02d; returning partial results.",
+                timeout,
+                lead_hour,
+                fxx,
+            )
+            break
+
+        scalars = None
+        units = ""
+        for attempt in range(1 + retries):
+            try:
+                scalars, units = _fetch_hrrr_point_values(Herbie, run_time, points, lead_hour)
+                consecutive_failures = 0
+                break
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                if attempt < retries and _time.monotonic() < deadline:
+                    logger.debug("HRRR fetch retry %d/%d for f%02d: %s", attempt + 1, retries, lead_hour, exc)
+                    _time.sleep(min(retry_delay, max(deadline - _time.monotonic(), 0)))
+                else:
+                    logger.debug("HRRR fetch failed for f%02d after %d attempt(s): %s", lead_hour, attempt + 1, exc)
+                    consecutive_failures += 1
+
+        if scalars is None:
+            if consecutive_failures >= 3:
+                logger.warning(
+                    "HRRR: %d consecutive lead-hour failures; aborting remaining hours.",
+                    consecutive_failures,
+                )
+                break
             continue
 
         if scalars.size != len(normalized_locations):

@@ -361,3 +361,4 @@ date,tmax_f,tmin_f,precip_in,precip_trace,cli_station,source_url,city,source,arc
 2026-03-26,87.0,67.0,,False,DFW,https://forecast.weather.gov/product.php?site=NWS&issuedby=DFW&product=CLI&version=6&format=txt&glossary=0,Dallas,cli_archive,6.0
 2026-03-27,74.0,59.0,,False,DFW,https://forecast.weather.gov/product.php?site=NWS&issuedby=DFW&product=CLI&version=4&format=txt&glossary=0,Dallas,cli_archive,4.0
 2026-03-28,57.0,52.0,,False,DFW,https://forecast.weather.gov/product.php?site=NWS&issuedby=DFW&product=CLI&version=2&format=txt&glossary=0,Dallas,cli_archive,2.0
+2026-04-03,84.0,70.0,,False,DFW,https://forecast.weather.gov/product.php?site=NWS&issuedby=DFW&product=CLI&version=1&format=txt&glossary=0,Dallas,cli_archive,1.0

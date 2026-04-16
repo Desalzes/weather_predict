@@ -1,0 +1,13 @@
+[Unit]
+Description=Weather Signals - Settle Paper Trades
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/weather
+ExecStart=/opt/weather/.venv/bin/python main.py --settle-paper-trades
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300

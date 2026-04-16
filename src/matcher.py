@@ -21,6 +21,18 @@ _ENSEMBLE_SIGMA_FLOOR_F = 1.0
 _ENSEMBLE_SIGMA_CAP_F = 6.0
 
 
+def configure_sigma_bounds(
+    floor_f: float | None = None,
+    cap_f: float | None = None,
+) -> None:
+    """Override module-level sigma bounds from config at startup."""
+    global _ENSEMBLE_SIGMA_FLOOR_F, _ENSEMBLE_SIGMA_CAP_F
+    if floor_f is not None:
+        _ENSEMBLE_SIGMA_FLOOR_F = float(floor_f)
+    if cap_f is not None:
+        _ENSEMBLE_SIGMA_CAP_F = float(cap_f)
+
+
 def _normal_cdf(x: float, mu: float = 0.0, sigma: float = 1.0) -> float:
     """Standard normal CDF using math.erfc — no scipy needed."""
     sigma = max(float(sigma), 1e-6)
@@ -114,6 +126,38 @@ def _is_bucket_market(ticker: str) -> bool:
     """Return True if the ticker's last segment starts with B (bucket/range)."""
     last_seg = ticker.split("-")[-1]
     return last_seg.upper().startswith("B")
+
+
+def _settlement_rule_from_bounds(
+    low: Optional[float],
+    high: Optional[float],
+) -> str:
+    if low is not None and high is not None:
+        return "between_inclusive"
+    if low is not None:
+        return "gte"
+    if high is not None:
+        return "lte"
+    raise ValueError("Settlement bounds require at least one bound")
+
+
+def _kalshi_bucket_bounds_from_threshold(bucket_threshold: float) -> tuple[float, float]:
+    """Return continuous bounds for a Kalshi bucket threshold like ``66.5``."""
+    threshold = float(bucket_threshold)
+    return threshold - 1.0, threshold + 1.0
+
+
+def _should_apply_probability_calibration(
+    forecast_blend_source: str,
+    hours_to_settlement: Optional[float],
+    blend_horizon_hours: float,
+) -> bool:
+    """Apply isotonic calibration only in the day-ahead regime it was trained on."""
+    if forecast_blend_source != "open-meteo":
+        return False
+    if hours_to_settlement is None:
+        return True
+    return float(hours_to_settlement) >= float(blend_horizon_hours)
 
 
 def _extract_calendar_day_temps(
@@ -376,7 +420,7 @@ def match_kalshi_markets(
             now_utc,
         )
 
-        if use_ngr_calibration and calibration_manager is not None:
+        if use_ngr_calibration and calibration_manager is not None and hasattr(calibration_manager, "predict_distribution"):
             lead_h = _lead_hours(str(m.get("close_time", "")), now_utc)
             doy = _doy_from_date(market_date)
             forecast_value, sigma_f, forecast_calibration_source = calibration_manager.predict_distribution(
@@ -393,8 +437,7 @@ def match_kalshi_markets(
             )
 
         if is_bucket:
-            bucket_low = threshold - 1.0
-            bucket_high = threshold + 1.0
+            bucket_low, bucket_high = _kalshi_bucket_bounds_from_threshold(threshold)
             raw_prob = compute_temperature_probability(
                 forecast_value,
                 bucket_low,
@@ -408,6 +451,9 @@ def match_kalshi_markets(
                 sigma_f,
             )
             outcome_label = f"{math.floor(threshold):.0f}-{math.ceil(threshold):.0f}\u00b0F"
+            settlement_rule = "between_inclusive"
+            settlement_low_f = float(math.floor(threshold))
+            settlement_high_f = float(math.ceil(threshold))
         else:
             threshold_direction = _kalshi_threshold_direction(m)
             if threshold_direction is None:
@@ -421,9 +467,16 @@ def match_kalshi_markets(
             )
             our_prob = raw_prob
             outcome_label = _kalshi_threshold_outcome_label(threshold_direction, threshold)
+            settlement_rule = "lte" if threshold_direction == "below" else "gt"
+            settlement_low_f = float(threshold) if threshold_direction == "above" else None
+            settlement_high_f = float(threshold) if threshold_direction == "below" else None
 
         probability_calibration_source = "raw"
-        if calibration_manager is not None:
+        if calibration_manager is not None and _should_apply_probability_calibration(
+            forecast_blend_source,
+            hours_to_settlement,
+            hrrr_blend_horizon_hours,
+        ):
             our_prob, probability_calibration_source = calibration_manager.calibrate_probability(
                 city,
                 mtype,
@@ -468,6 +521,10 @@ def match_kalshi_markets(
             "volume24hr": m.get("volume_24h", 0),
             "city": city,
             "market_type": mtype,
+            "actual_field": "tmax_f" if mtype == "high" else "tmin_f",
+            "settlement_rule": settlement_rule,
+            "settlement_low_f": settlement_low_f,
+            "settlement_high_f": settlement_high_f,
             "yes_bid": m.get("yes_bid", 0),
             "yes_ask": m.get("yes_ask", 0),
         })
@@ -554,7 +611,7 @@ def match_polymarket_markets(
             now_utc,
         )
 
-        if use_ngr_calibration and calibration_manager is not None:
+        if use_ngr_calibration and calibration_manager is not None and hasattr(calibration_manager, "predict_distribution"):
             lead_h = _lead_hours(str(market.get("endDate", "")), now_utc)
             doy = _doy_from_date(today_str)
             poly_forecast_value, sigma_f, poly_forecast_calibration_source = calibration_manager.predict_distribution(
@@ -562,7 +619,7 @@ def match_polymarket_markets(
             )
         else:
             sigma_f = ensemble_sigma_f
-            poly_forecast_value = None  # resolved per outcome below
+            poly_forecast_value = None
             poly_forecast_calibration_source = None
 
         outcomes = market.get("outcomes", [])
@@ -570,12 +627,16 @@ def match_polymarket_markets(
         if not outcomes or not prices or len(outcomes) != len(prices):
             continue
 
+        end_dt = _parse_iso_datetime(str(market.get("endDate", "")))
+        market_date = end_dt.date().isoformat() if end_dt is not None else today_str
+
         for outcome_str, market_price in zip(outcomes, prices):
             low, high = _parse_outcome_range(outcome_str)
             if low is None and high is None:
                 continue
+            settlement_rule = _settlement_rule_from_bounds(low, high)
 
-            if use_ngr_calibration and calibration_manager is not None:
+            if poly_forecast_value is not None:
                 forecast_value = poly_forecast_value
                 forecast_calibration_source = poly_forecast_calibration_source
             else:
@@ -589,7 +650,11 @@ def match_polymarket_markets(
             raw_prob = compute_temperature_probability(forecast_value, low, high, sigma_f)
             our_prob = raw_prob
             probability_calibration_source = "raw"
-            if calibration_manager is not None:
+            if calibration_manager is not None and _should_apply_probability_calibration(
+                forecast_blend_source,
+                hours_to_settlement,
+                hrrr_blend_horizon_hours,
+            ):
                 our_prob, probability_calibration_source = calibration_manager.calibrate_probability(
                     city,
                     sigma_market_type,
@@ -602,6 +667,7 @@ def match_polymarket_markets(
                 "ticker": market.get("slug", ""),
                 "market_question": market["question"],
                 "outcome": outcome_str,
+                "market_date": market_date,
                 "our_probability": round(our_prob, 4),
                 "market_price": round(market_price, 4),
                 "edge": round(edge, 4),
@@ -623,6 +689,10 @@ def match_polymarket_markets(
                 "volume24hr": market.get("volume24hr", 0),
                 "city": city,
                 "market_type": mtype,
+                "actual_field": "tmax_f" if sigma_market_type == "high" else "tmin_f",
+                "settlement_rule": settlement_rule,
+                "settlement_low_f": low,
+                "settlement_high_f": high,
             })
 
     filtered = [o for o in opps if o["abs_edge"] >= min_edge]

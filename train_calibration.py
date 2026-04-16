@@ -12,6 +12,7 @@ from pathlib import Path
 
 from src.config import load_app_config, resolve_config_path
 from src.calibration import train_city_models
+from src.logging_setup import configure_logging, set_log_level
 from src.station_truth import (
     CALIBRATION_MODELS_DIR,
     FORECAST_ARCHIVE_DIR,
@@ -21,14 +22,13 @@ from src.station_truth import (
     load_station_map,
 )
 
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("weather.train_calibration")
-log.setLevel(logging.INFO)
-
 _CONFIG_PATH = resolve_config_path()
+log = configure_logging(
+    "weather.train_calibration",
+    config_path=_CONFIG_PATH,
+    log_filename="train_calibration.log",
+    level=logging.INFO,
+)
 
 
 def load_config(config_path: Path | str = _CONFIG_PATH) -> dict:
@@ -48,7 +48,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.verbose:
-        log.setLevel(logging.DEBUG)
+        set_log_level(logging.DEBUG)
 
     config = load_config(args.config)
     ensure_data_directories()
@@ -123,7 +123,10 @@ def main() -> None:
 
     log.info(
         "Training complete: %d EMOS, %d isotonic, %d NGR, %d skipped",
-        total_city_models, total_isotonic_models, total_ngr_models, skipped_cities,
+        total_city_models,
+        total_isotonic_models,
+        total_ngr_models,
+        skipped_cities,
     )
 
 
