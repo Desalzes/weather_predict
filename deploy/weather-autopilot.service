@@ -1,0 +1,13 @@
+[Unit]
+Description=Weather Signals - Weekly Autopilot (retrain + evaluate + settle)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/weather
+ExecStart=/opt/weather/.venv/bin/python scripts/autopilot_weekly.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800

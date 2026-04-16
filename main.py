@@ -410,16 +410,20 @@ def run_scan(
                 settle_paper_trades,
             )
 
+            sizing_config = dict(config)
+            sizing_config["_strategy_policy_payload"] = strategy_policy or {}
             paper_trade_log = log_paper_trades(
                 trade_opportunities,
                 scan_timestamp=timestamp,
                 ledger_path=paper_trade_ledger_path,
                 contracts=paper_trade_contracts,
+                config=sizing_config,
             )
             log.info(
-                "Paper trade ledger: %d new trade(s), %d duplicate open position(s) skipped.",
+                "Paper trade ledger: %d new trade(s), %d duplicate open position(s) skipped, %d zero-size skipped.",
                 paper_trade_log["new_trades"],
                 paper_trade_log["skipped_existing_open_positions"],
+                paper_trade_log.get("skipped_zero_size", 0),
             )
             if paper_trade_auto_settle:
                 refresh_result = refresh_station_actuals_for_open_trades(

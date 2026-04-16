@@ -143,12 +143,12 @@ class ConfigLoadingTests(unittest.TestCase):
         with patch.dict(sys.modules, fake_modules):
             result = main.run_scan(config=config)
 
-        log_paper_trades.assert_called_once_with(
-            [],
-            scan_timestamp=result["timestamp"],
-            ledger_path="data/paper_trades/ledger.csv",
-            contracts=1.0,
-        )
+        log_paper_trades.assert_called_once()
+        args, kwargs = log_paper_trades.call_args
+        self.assertEqual(args[0], [])
+        self.assertEqual(kwargs["scan_timestamp"], result["timestamp"])
+        self.assertEqual(kwargs["ledger_path"], "data/paper_trades/ledger.csv")
+        self.assertEqual(kwargs["contracts"], 1.0)
         settle_paper_trades.assert_called_once_with(
             ledger_path="data/paper_trades/ledger.csv",
             summary_path="data/paper_trades/summary.json",

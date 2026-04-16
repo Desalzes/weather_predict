@@ -497,11 +497,46 @@ def log_paper_trades(
 
     new_records = []
     skipped_existing = 0
+    skipped_zero_size = 0
+    use_kelly = bool(
+        config
+        and (
+            config.get("execution", {}).get("sizing") == "quarter_kelly"
+            or str(config.get("strategy_policy", {}).get("execution", {}).get("sizing", "")) == "quarter_kelly"
+        )
+    )
+    # Also honor sizing if specified at the top-level policy execution block from strategy_policy.json
+    if not use_kelly and config:
+        policy_obj = config.get("_strategy_policy_payload") or {}
+        if policy_obj.get("execution", {}).get("sizing") == "quarter_kelly":
+            use_kelly = True
+
     for opportunity in opportunities:
+        if use_kelly:
+            from src.sizing import compute_position_size
+            side_upper = str(opportunity.get("direction", "")).upper()
+            trade_contracts = float(compute_position_size(
+                edge=float(opportunity.get("edge") or 0.0),
+                price=float(opportunity.get("market_price") or 0.0),
+                side=side_upper,
+                kelly_fraction=float(config.get("kelly_fraction", 0.25)),
+                bankroll_dollars=float(config.get("bankroll_dollars", 100.0)),
+                max_order_cost_dollars=float(
+                    config.get("paper_trade_max_order_cost_dollars",
+                        config.get("max_order_cost_dollars", 10.0))
+                ),
+                hard_cap_contracts=int(config.get("max_contracts_hard_cap", 20)),
+            ))
+            if trade_contracts <= 0:
+                skipped_zero_size += 1
+                continue
+        else:
+            trade_contracts = contracts
+
         record = paper_trade_record_from_opportunity(
             opportunity,
             scan_timestamp=scan_timestamp,
-            contracts=contracts,
+            contracts=trade_contracts,
             fee_settings=fee_settings,
         )
         key = _open_position_key(
@@ -528,6 +563,7 @@ def log_paper_trades(
         "ledger_path": str(ledger),
         "new_trades": len(new_records),
         "skipped_existing_open_positions": skipped_existing,
+        "skipped_zero_size": skipped_zero_size,
         "total_open_positions": int((frame["status"].fillna("open") != "settled").sum()),
     }
 

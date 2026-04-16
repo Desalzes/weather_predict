@@ -59,9 +59,12 @@ cp "$INSTALL_DIR/deploy/weather-scanner.service" /etc/systemd/system/
 cp "$INSTALL_DIR/deploy/weather-scanner.timer" /etc/systemd/system/
 cp "$INSTALL_DIR/deploy/weather-settle.service" /etc/systemd/system/
 cp "$INSTALL_DIR/deploy/weather-settle.timer" /etc/systemd/system/
+cp "$INSTALL_DIR/deploy/weather-autopilot.service" /etc/systemd/system/
+cp "$INSTALL_DIR/deploy/weather-autopilot.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable weather-scanner.timer
 systemctl enable weather-settle.timer
+systemctl enable weather-autopilot.timer
 
 echo ""
 echo "=== Setup Complete ==="
@@ -69,8 +72,9 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit config:    nano $INSTALL_DIR/config.json"
 echo "  2. Add API key:    nano $INSTALL_DIR/api-credentials.txt"
-echo "  3. Start timers:   systemctl start weather-scanner.timer weather-settle.timer"
+echo "  3. Start timers:   systemctl start weather-scanner.timer weather-settle.timer weather-autopilot.timer"
 echo "  4. Check status:   systemctl list-timers weather-*"
 echo "  5. Manual scan:    cd $INSTALL_DIR && .venv/bin/python main.py --once"
-echo "  6. View logs:      journalctl -u weather-scanner -f"
+echo "  6. Manual retrain: cd $INSTALL_DIR && .venv/bin/python scripts/autopilot_weekly.py"
+echo "  7. View logs:      journalctl -u weather-scanner -f"
 echo ""

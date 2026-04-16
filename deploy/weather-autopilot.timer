@@ -1,0 +1,10 @@
+[Unit]
+Description=Weather Signals Weekly Autopilot - Sunday 03:00 UTC
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

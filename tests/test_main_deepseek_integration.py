@@ -135,12 +135,12 @@ class MainDeepSeekIntegrationTests(unittest.TestCase):
         with patch.dict(sys.modules, fake_modules):
             result = main.run_scan(config=_config())
 
-        log_paper_trades.assert_called_once_with(
-            [approved],
-            scan_timestamp=result["timestamp"],
-            ledger_path="data/paper_trades/ledger.csv",
-            contracts=1.0,
-        )
+        log_paper_trades.assert_called_once()
+        _, kwargs = log_paper_trades.call_args
+        self.assertEqual(log_paper_trades.call_args[0][0], [approved])
+        self.assertEqual(kwargs["scan_timestamp"], result["timestamp"])
+        self.assertEqual(kwargs["ledger_path"], "data/paper_trades/ledger.csv")
+        self.assertEqual(kwargs["contracts"], 1.0)
         self.assertEqual(result["opportunities"], [approved, rejected])
         self.assertEqual(result["trade_opportunities"], [approved])
         self.assertEqual(result["deepseek_review"]["status"], "completed")
@@ -213,12 +213,12 @@ class MainDeepSeekIntegrationTests(unittest.TestCase):
         with patch.dict(sys.modules, fake_modules):
             result = main.run_scan(config=_config())
 
-        log_paper_trades.assert_called_once_with(
-            [candidate],
-            scan_timestamp=result["timestamp"],
-            ledger_path="data/paper_trades/ledger.csv",
-            contracts=1.0,
-        )
+        log_paper_trades.assert_called_once()
+        _, kwargs = log_paper_trades.call_args
+        self.assertEqual(log_paper_trades.call_args[0][0], [candidate])
+        self.assertEqual(kwargs["scan_timestamp"], result["timestamp"])
+        self.assertEqual(kwargs["ledger_path"], "data/paper_trades/ledger.csv")
+        self.assertEqual(kwargs["contracts"], 1.0)
         self.assertEqual(result["trade_opportunities"], [candidate])
 
 
