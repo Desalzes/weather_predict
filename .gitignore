@@ -14,6 +14,9 @@ api-credentials.txt
 
 # Runtime artifacts
 data/hrrr_cache/
+# Opportunity archive — regenerable runtime data, not long-term artifact
+data/opportunity_archive/
+data/evaluation_reports/*.json
 *.log
 
 # OS files
