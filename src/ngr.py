@@ -184,6 +184,10 @@ class NGRCalibrator:
         # Hard sanity bounds to catch pathological extrapolation
         sigma = math.sqrt(max(sigma2, 0.0625))  # floor at 0.25F
         sigma = min(sigma, 12.0)  # cap at 12F
+        # Guard against pathological mu drift (e.g. alpha corruption): reject
+        # corrections more than 30F away from the raw forecast.
+        if abs(mu - float(forecast_f)) > 30.0:
+            mu = float(forecast_f)
         return mu, sigma
 
     def save(self, path) -> "Path":

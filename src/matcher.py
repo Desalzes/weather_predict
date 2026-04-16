@@ -232,14 +232,20 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
         return None
 
 
-def _doy_from_date(target_date: Optional[str]) -> int:
-    """Return day-of-year (1–366) for an ISO date string; returns 1 on parse failure."""
-    if not target_date:
-        return 1
-    try:
-        return datetime.fromisoformat(target_date).timetuple().tm_yday
-    except ValueError:
-        return 1
+def _doy_from_date(target_date: Optional[str], fallback_now: Optional[datetime] = None) -> int:
+    """Return day-of-year (1–366) for an ISO date string.
+
+    On parse failure, falls back to today's DOY (seasonally current) rather
+    than 1 so that NGR's sin/cos(doy) features aren't silently biased to
+    Jan 1 when a date string is malformed.
+    """
+    if target_date:
+        try:
+            return datetime.fromisoformat(target_date).timetuple().tm_yday
+        except ValueError:
+            logger.debug("Could not parse DOY from %r, falling back to today", target_date)
+    now = fallback_now or datetime.now(timezone.utc)
+    return now.timetuple().tm_yday
 
 
 def _lead_hours(close_time: str, now_utc: Optional[datetime]) -> float:
