@@ -101,3 +101,81 @@ def log_opportunities(
             writer.writerow(_row_from_opportunity(scan_id, opp))
     logger.info("Logged %d opportunities to %s", len(opportunities), path)
     return path
+
+
+def _parse_outcome_bounds(outcome: str) -> tuple[Optional[float], Optional[float]]:
+    """Extract bounds from outcome labels like '>75°F', '<63°F', '66-67°F'."""
+    if not outcome:
+        return None, None
+    cleaned = outcome.replace("°F", "").replace("°", "").strip()
+    if cleaned.startswith(">"):
+        return float(cleaned[1:]), None
+    if cleaned.startswith("<"):
+        return None, float(cleaned[1:])
+    if "-" in cleaned:
+        low_s, high_s = cleaned.split("-", 1)
+        return float(low_s), float(high_s)
+    return None, None
+
+
+def _yes_outcome(low: Optional[float], high: Optional[float], actual_f: float, market_type: str) -> int:
+    if low is not None and high is not None:
+        return 1 if low <= actual_f <= high else 0
+    if low is not None:
+        return 1 if actual_f > low else 0   # threshold ">"
+    if high is not None:
+        return 1 if actual_f < high else 0  # threshold "<"
+    return 0
+
+
+def settle_opportunity_archive(
+    archive_dir: Path | str,
+    station_actuals: dict,
+) -> int:
+    """Join archive rows with station truth; fill yes_outcome/actual_value_f in-place.
+
+    station_actuals: {city: pd.DataFrame with columns date, tmax_f, tmin_f}.
+    Returns number of rows updated.
+    """
+    archive_dir = Path(archive_dir)
+    if not archive_dir.exists():
+        return 0
+
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    total_updated = 0
+
+    for csv_path in sorted(archive_dir.glob("*.csv")):
+        frame = pd.read_csv(csv_path, dtype={"yes_outcome": "object", "actual_value_f": "object", "settled_at_utc": "object"})
+        if frame.empty:
+            continue
+        frame_updated = False
+
+        for idx, row in frame.iterrows():
+            if not pd.isna(row.get("yes_outcome")):
+                continue
+            city = row["city"]
+            actuals_df = station_actuals.get(city)
+            if actuals_df is None or actuals_df.empty:
+                continue
+            match = actuals_df.loc[actuals_df["date"].astype(str) == str(row["market_date"])]
+            if match.empty:
+                continue
+            actual_col = "tmax_f" if row["market_type"] == "high" else "tmin_f"
+            actual_val = match.iloc[0][actual_col]
+            if pd.isna(actual_val):
+                continue
+            low, high = _parse_outcome_bounds(str(row["outcome"]))
+            if low is None and high is None:
+                continue
+            yo = _yes_outcome(low, high, float(actual_val), row["market_type"])
+            frame.at[idx, "yes_outcome"] = yo
+            frame.at[idx, "actual_value_f"] = float(actual_val)
+            frame.at[idx, "settled_at_utc"] = now_iso
+            frame_updated = True
+            total_updated += 1
+
+        if frame_updated:
+            frame.to_csv(csv_path, index=False)
+
+    logger.info("Settled %d archived opportunities across %s", total_updated, archive_dir)
+    return total_updated
