@@ -326,7 +326,7 @@ def train_city_models(
             outcome["trained_ngr"] = True
             outcome["ngr_path"] = str(ngr_path)
             outcome["ngr_training_crps"] = float(ngr_calibrator.training_crps)
-        except (ValueError, RuntimeError) as exc:
+        except Exception as exc:
             logger.warning("NGR fit skipped for %s %s: %s", city, market_type, exc)
 
         results[market_type] = outcome
