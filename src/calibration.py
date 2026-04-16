@@ -22,6 +22,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LinearRegression
 
 from src.station_truth import CALIBRATION_MODELS_DIR, _slugify_city
+from src.ngr import NGRCalibrator
 
 logger = logging.getLogger("weather.calibration")
 
@@ -282,8 +283,11 @@ def train_city_models(
             "rows": int(len(prepared)),
             "emos_path": None,
             "isotonic_path": None,
+            "ngr_path": None,
             "trained_emos": False,
             "trained_isotonic": False,
+            "trained_ngr": False,
+            "ngr_training_crps": None,
             "status": "skipped",
             "reason": "",
         }
@@ -311,6 +315,19 @@ def train_city_models(
         else:
             outcome["reason"] = "insufficient isotonic example diversity"
             outcome["status"] = "trained_emos_only"
+
+        # NGR uses the full training_df (needs date + lead columns)
+        try:
+            ngr_calibrator = NGRCalibrator(city=city, market_type=market_type).fit(
+                training_df, min_rows=20
+            )
+            ngr_path = calibration_model_path(city, market_type, "ngr", model_dir=model_dir)
+            ngr_calibrator.save(ngr_path)
+            outcome["trained_ngr"] = True
+            outcome["ngr_path"] = str(ngr_path)
+            outcome["ngr_training_crps"] = float(ngr_calibrator.training_crps)
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("NGR fit skipped for %s %s: %s", city, market_type, exc)
 
         results[market_type] = outcome
 
