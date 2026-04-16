@@ -1,0 +1,27 @@
+{
+  "policy_version": 3,
+  "status": "active",
+  "generated_at_utc": "2026-04-16T14:00:00Z",
+  "generated_by": "claude_session_review",
+  "objective": "Take only liquid, high-conviction threshold trades. Avoid narrow bucket markets where the scanner systematically loses.",
+  "selection": {
+    "sources": ["kalshi"],
+    "min_abs_edge": 0.15,
+    "min_volume24hr": 2000,
+    "max_candidates_per_scan": 3,
+    "max_hours_to_settlement": 24,
+    "allowed_market_types": ["high", "low"],
+    "allowed_settlement_rules": ["lte", "gt"],
+    "allowed_cities": [],
+    "blocked_cities": ["Washington DC"]
+  },
+  "execution": {
+    "max_contracts_per_trade": 1,
+    "max_new_orders_per_day": 3,
+    "max_order_cost_dollars": 10.0,
+    "time_in_force": "fill_or_kill"
+  },
+  "rationale": {
+    "v3_changes": "Added allowed_settlement_rules to block between_inclusive (bucket) markets. Of 9 settled paper trades, 8 were bucket trades with 1W/7L. The single win was a high-variance NO bet. Bucket markets have narrow 2F windows that are inherently low-probability and the scanner is taking large SELL positions at high prices that lose frequently. Threshold markets (lte/gt) better match the calibration models distributional edge."
+  }
+}
