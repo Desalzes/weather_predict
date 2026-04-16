@@ -129,3 +129,39 @@ def test_ngr_fit_raises_on_too_few_rows():
     })
     with pytest.raises(ValueError, match="at least"):
         NGRCalibrator(city="Test", market_type="high").fit(df, min_rows=20)
+
+
+def test_ngr_save_and_load_round_trip(tmp_path):
+    rng = np.random.default_rng(0)
+    n = 60
+    doy_vals = rng.integers(1, 366, size=n)
+    base_date = pd.Timestamp("2025-01-01")
+    dates = [(base_date + pd.Timedelta(days=int(d-1))).strftime("%Y-%m-%d") for d in doy_vals]
+
+    df = pd.DataFrame({
+        "forecast_high_f": rng.uniform(60, 90, n),
+        "actual_high_f": rng.uniform(60, 90, n),
+        "ensemble_high_std_f": rng.uniform(0.5, 2.5, n),
+        "forecast_lead_days": [1] * n,
+        "date": dates,
+        "as_of_utc": ["2025-01-01T00:00:00+00:00"] * n,
+    })
+
+    original = NGRCalibrator(city="Test", market_type="high").fit(df)
+    path = tmp_path / "ngr.pkl"
+    original.save(path)
+
+    loaded = NGRCalibrator.load(path)
+    assert loaded.is_fitted
+    assert loaded.training_rows == original.training_rows
+    np.testing.assert_allclose(loaded.alpha, original.alpha)
+    np.testing.assert_allclose(loaded.beta, original.beta)
+    assert loaded.sigma2_floor == original.sigma2_floor
+
+    # Predictions identical
+    for _ in range(5):
+        f = float(rng.uniform(60, 90))
+        s = float(rng.uniform(0.5, 3.0))
+        l = float(rng.choice([24, 48]))
+        d = int(rng.integers(1, 366))
+        assert original.predict(f, s, l, d) == loaded.predict(f, s, l, d)

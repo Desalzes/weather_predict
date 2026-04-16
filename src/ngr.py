@@ -185,3 +185,19 @@ class NGRCalibrator:
         sigma = math.sqrt(max(sigma2, 0.0625))  # floor at 0.25F
         sigma = min(sigma, 12.0)  # cap at 12F
         return mu, sigma
+
+    def save(self, path) -> "Path":
+        from pathlib import Path
+        import pickle
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as f:
+            pickle.dump(self, f)
+        return target
+
+    @classmethod
+    def load(cls, path) -> "NGRCalibrator":
+        from pathlib import Path
+        import pickle
+        with open(Path(path), "rb") as f:
+            return pickle.load(f)
