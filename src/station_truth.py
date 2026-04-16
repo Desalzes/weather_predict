@@ -45,6 +45,7 @@ _EMPTY_TRAINING_COLUMNS = [
     "ensemble_high_std_f",
     "ensemble_low_std_f",
     "as_of_utc",
+    "forecast_lead_days",
 ]
 
 
