@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -89,7 +89,7 @@ def log_opportunities(
     if not opportunities:
         return None
     archive_dir = Path(archive_dir)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = _archive_path_for_date(archive_dir, today)
 
     write_header = not path.exists()
@@ -104,27 +104,41 @@ def log_opportunities(
 
 
 def _parse_outcome_bounds(outcome: str) -> tuple[Optional[float], Optional[float]]:
-    """Extract bounds from outcome labels like '>75°F', '<63°F', '66-67°F'."""
+    """Extract bounds from outcome labels like '>75°F', '<63°F', '66-67°F'.
+
+    Returns (None, None) on any label we don't recognize rather than raising,
+    so settle_opportunity_archive can skip unknown rows cleanly.
+    """
     if not outcome:
         return None, None
-    cleaned = outcome.replace("°F", "").replace("°", "").strip()
-    if cleaned.startswith(">"):
-        return float(cleaned[1:]), None
-    if cleaned.startswith("<"):
-        return None, float(cleaned[1:])
-    if "-" in cleaned:
-        low_s, high_s = cleaned.split("-", 1)
-        return float(low_s), float(high_s)
+    cleaned = str(outcome).replace("°F", "").replace("°", "").strip()
+    try:
+        if cleaned.startswith(">"):
+            return float(cleaned[1:].strip()), None
+        if cleaned.startswith("<"):
+            return None, float(cleaned[1:].strip())
+        if "-" in cleaned and not cleaned.startswith("-"):
+            low_s, high_s = cleaned.split("-", 1)
+            return float(low_s.strip()), float(high_s.strip())
+    except ValueError:
+        logger.debug("Could not parse outcome bounds from %r", outcome)
+        return None, None
     return None, None
 
 
-def _yes_outcome(low: Optional[float], high: Optional[float], actual_f: float, market_type: str) -> int:
+def _yes_outcome(low: Optional[float], high: Optional[float], actual_f: float) -> int:
+    """Inclusive-boundary semantics matching calibration.build_isotonic_examples.
+
+    - Threshold ">low": YES iff actual >= low (inclusive).
+    - Threshold "<high": YES iff actual <= high (inclusive).
+    - Bucket [low, high]: YES iff low <= actual <= high.
+    """
     if low is not None and high is not None:
         return 1 if low <= actual_f <= high else 0
     if low is not None:
-        return 1 if actual_f > low else 0   # threshold ">"
+        return 1 if actual_f >= low else 0
     if high is not None:
-        return 1 if actual_f < high else 0  # threshold "<"
+        return 1 if actual_f <= high else 0
     return 0
 
 
@@ -141,7 +155,7 @@ def settle_opportunity_archive(
     if not archive_dir.exists():
         return 0
 
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     total_updated = 0
 
     for csv_path in sorted(archive_dir.glob("*.csv")):
@@ -167,7 +181,7 @@ def settle_opportunity_archive(
             low, high = _parse_outcome_bounds(str(row["outcome"]))
             if low is None and high is None:
                 continue
-            yo = _yes_outcome(low, high, float(actual_val), row["market_type"])
+            yo = _yes_outcome(low, high, float(actual_val))
             frame.at[idx, "yes_outcome"] = yo
             frame.at[idx, "actual_value_f"] = float(actual_val)
             frame.at[idx, "settled_at_utc"] = now_iso
