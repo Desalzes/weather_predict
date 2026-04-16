@@ -72,3 +72,60 @@ def test_ngr_calibrator_initial_state():
     assert cal.market_type == "high"
     assert cal.is_fitted is False
     assert cal.training_rows == 0
+
+
+def test_ngr_fit_recovers_known_relationship():
+    """Synthetic data where actual = forecast + seasonal bias, residual std grows with spread."""
+    rng = np.random.default_rng(42)
+    n = 500
+    forecast = rng.uniform(60, 90, size=n)
+    spread = rng.uniform(0.5, 3.0, size=n)
+    doy = rng.integers(1, 366, size=n)
+    lead_h = rng.choice([24, 48, 72], size=n).astype(float)
+
+    # True generative process:
+    # mu_true = forecast + 0.5 + 1.5*sin(2pi*doy/365)
+    # sigma_true = 1.0 + 0.8*spread
+    sin_doy = np.sin(2 * math.pi * doy / 365)
+    cos_doy = np.cos(2 * math.pi * doy / 365)
+    mu_true = forecast + 0.5 + 1.5 * sin_doy
+    sigma_true = 1.0 + 0.8 * spread
+    actual = mu_true + rng.normal(0, sigma_true)
+
+    # Generate dates from DOY (more reliable than formatting)
+    base_date = pd.Timestamp("2025-01-01")
+    dates = [(base_date + pd.Timedelta(days=int(d-1))).strftime("%Y-%m-%d") for d in doy]
+
+    df = pd.DataFrame({
+        "forecast_high_f": forecast,
+        "actual_high_f": actual,
+        "ensemble_high_std_f": spread,
+        "forecast_lead_days": lead_h / 24,
+        "date": dates,
+        "as_of_utc": ["2025-01-01T00:00:00+00:00"] * n,
+    })
+
+    cal = NGRCalibrator(city="Test", market_type="high").fit(df)
+
+    assert cal.is_fitted
+    assert cal.training_rows == n
+    # Point prediction on the mean of the training range should be within 1F
+    mu_pred, sigma_pred = cal.predict(forecast_f=75.0, spread_f=2.0, lead_h=48.0, doy=180)
+    assert 74.0 < mu_pred < 78.0
+    # Sigma should respond to spread
+    _, sigma_low = cal.predict(forecast_f=75.0, spread_f=0.5, lead_h=48.0, doy=180)
+    _, sigma_high = cal.predict(forecast_f=75.0, spread_f=3.0, lead_h=48.0, doy=180)
+    assert sigma_high > sigma_low
+
+
+def test_ngr_fit_raises_on_too_few_rows():
+    df = pd.DataFrame({
+        "forecast_high_f": [70.0, 72.0],
+        "actual_high_f": [71.0, 73.0],
+        "ensemble_high_std_f": [1.0, 1.0],
+        "forecast_lead_days": [1, 1],
+        "date": ["2025-04-01", "2025-04-02"],
+        "as_of_utc": ["2025-03-31T12:00:00+00:00", "2025-04-01T12:00:00+00:00"],
+    })
+    with pytest.raises(ValueError, match="at least"):
+        NGRCalibrator(city="Test", market_type="high").fit(df, min_rows=20)
