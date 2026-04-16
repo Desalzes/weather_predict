@@ -1,0 +1,28 @@
+{
+  "policy_version": 4,
+  "status": "active",
+  "generated_at_utc": "2026-04-16T20:00:00Z",
+  "generated_by": "ngr_calibration_upgrade",
+  "objective": "Take threshold trades with >= 8% calibrated edge, size by quarter-Kelly, expand candidate pool to accumulate paper data.",
+  "selection": {
+    "sources": ["kalshi"],
+    "min_abs_edge": 0.08,
+    "min_volume24hr": 2000,
+    "max_candidates_per_scan": 8,
+    "max_hours_to_settlement": 48,
+    "allowed_market_types": ["high", "low"],
+    "allowed_settlement_rules": ["lte", "gt"],
+    "allowed_cities": [],
+    "blocked_cities": ["Washington DC"]
+  },
+  "execution": {
+    "sizing": "quarter_kelly",
+    "max_contracts_per_trade": 20,
+    "max_new_orders_per_day": 10,
+    "max_order_cost_dollars": 10.0,
+    "time_in_force": "fill_or_kill"
+  },
+  "rationale": {
+    "v4_changes": "Lowered min_abs_edge 0.15 -> 0.08 now that NGR sigma is calibrated per city+regime. Widened lead horizon 24h -> 48h. Bumped max_candidates_per_scan 3 -> 8 and max_new_orders_per_day 3 -> 10 to accumulate paper data faster. Switched execution sizing to quarter-Kelly with hard cap 20 contracts. v3 preserved as strategy_policy_v3.json for rollback."
+  }
+}
