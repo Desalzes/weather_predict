@@ -99,3 +99,77 @@ def test_hrrr_precip_returns_daily_accumulation(monkeypatch):
 
     ny = result["New York"]
     assert ny["2026-04-21"]["total_in"] == pytest.approx(0.3, rel=1e-3)
+
+
+def test_hrrr_precip_returns_none_when_all_hours_fail(monkeypatch, caplog):
+    """When every hour's extraction fails, the city's entry must be None
+    (not an empty dict, which would look like 'no rain')."""
+    import logging
+    from src import fetch_precipitation
+
+    def failing_extract(location, fxx, **kwargs):
+        return []  # simulate 0/19 successful fetches
+
+    monkeypatch.setattr(fetch_precipitation, "_extract_hrrr_apcp_series", failing_extract)
+
+    with caplog.at_level(logging.WARNING, logger="weather.fetch_precipitation"):
+        result = fetch_precipitation.fetch_hrrr_precip_multi(
+            [{"name": "New York", "lat": 40.7, "lon": -74.0}],
+            fxx=18,
+        )
+
+    assert result["New York"] is None
+    assert any("0/19" in rec.message and "New York" in rec.message for rec in caplog.records)
+
+
+def test_hrrr_apcp_extractor_pins_run_time_across_lead_hours(monkeypatch):
+    """I1: every Herbie(...) invocation in a single extract call must use
+    the same run_time_utc so APCP doesn't cross a run-reset boundary."""
+    pytest.importorskip("herbie")
+
+    from datetime import datetime, timezone
+    from src import fetch_precipitation
+
+    class _FakeDataset:
+        def __init__(self, valid_time, value):
+            self._value = value
+
+            class _V:
+                def __init__(self, v):
+                    self.values = v
+
+            self.valid_time = _V(valid_time)
+
+        def sel(self, **kwargs):
+            class _S:
+                def __init__(self, v):
+                    self.values = v
+
+            return _S(self._value)
+
+    run_times_seen = []
+
+    class _FakeHerbie:
+        def __init__(self, *, model, product, fxx, **kwargs):
+            run_times_seen.append(kwargs.get("run_time") or kwargs.get("date"))
+            self._fxx = fxx
+
+        def xarray(self, *args, **kwargs):
+            return _FakeDataset(f"2026-04-21T{self._fxx:02d}:00:00", float(self._fxx))
+
+    # Replace the Herbie import target so _extract_hrrr_apcp_series picks it up
+    import herbie  # noqa: F401
+    monkeypatch.setattr("herbie.Herbie", _FakeHerbie)
+
+    pinned_run = datetime(2026, 4, 21, 12, 0, tzinfo=timezone.utc)
+    result = fetch_precipitation._extract_hrrr_apcp_series(
+        {"lat": 40.7, "lon": -74.0},
+        fxx=5,
+        run_time_utc=pinned_run,
+    )
+
+    assert len(run_times_seen) >= 1
+    # All calls used the pinned run, not whatever Herbie's default would pick
+    assert all(rt == pinned_run for rt in run_times_seen)
+    # And the extract should have produced 6 rows (f00..f05)
+    assert len(result) == 6

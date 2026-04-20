@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Iterable, Optional
 
 import requests
@@ -151,22 +152,38 @@ def _summarize_ensemble_precip(payload: dict) -> dict:
     return {"daily": daily_rows}
 
 
-def _extract_hrrr_apcp_series(location: dict, fxx: int, **kwargs) -> list[dict]:
-    """Return [{valid_time, apcp_kg_m2}, ...] from the latest HRRR run.
+def _extract_hrrr_apcp_series(
+    location: dict,
+    fxx: int,
+    run_time_utc: Optional[datetime] = None,
+) -> list[dict]:
+    """Return [{valid_time, apcp_kg_m2}, ...] from a single pinned HRRR run.
 
     Uses Herbie the same way fetch_hrrr does, but requests the APCP variable.
     Mirrors the fetch_hrrr import-failure handling (raises RuntimeError if
     Herbie is unavailable so the caller can degrade gracefully).
+
+    The HRRR run time is resolved once up front (reusing fetch_hrrr's
+    `_resolve_init_time` / availability-lag logic) and pinned for every
+    lead-hour request. HRRR APCP is reset to zero at run boundaries, so
+    mixing hours from different runs would produce bogus `max - min` totals.
     """
     try:
         from herbie import Herbie
     except ImportError as exc:
         raise RuntimeError("Herbie not installed — HRRR precip unavailable") from exc
 
+    # Pin the run time once so every lead-hour request targets the same HRRR
+    # cycle. Reuses the helper in fetch_hrrr.py to stay consistent with the
+    # temperature pipeline's availability-lag handling.
+    if run_time_utc is None:
+        from src.fetch_hrrr import _resolve_init_time
+        run_time_utc = _resolve_init_time()
+
     series: list[dict] = []
     for hour in range(0, fxx + 1):
         try:
-            H = Herbie(model="hrrr", product="sfc", fxx=hour)
+            H = Herbie(date=run_time_utc, model="hrrr", product="sfc", fxx=hour)
             ds = H.xarray(":APCP:surface")
             val_kg_m2 = float(ds.sel(
                 latitude=location["lat"], longitude=location["lon"], method="nearest"
@@ -184,23 +201,27 @@ def _extract_hrrr_apcp_series(location: dict, fxx: int, **kwargs) -> list[dict]:
 def fetch_hrrr_precip_multi(
     locations: Iterable[dict],
     fxx: int = 18,
-    **kwargs,
-) -> dict[str, dict]:
+    run_time_utc: Optional[datetime] = None,
+) -> dict[str, Optional[dict]]:
     """Fetch HRRR accumulated precipitation for each location.
 
-    Returns: {city_name: {date: {"total_in": float}, ...}}
+    Returns: {city_name: {date: {"total_in": float}, ...} | None}
 
     HRRR APCP is reset at the start of each run, so "total accumulation" for
-    a given date is the max APCP value observed on that date minus the first.
+    a given date is the maximum minus minimum APCP within the day.
     One kg/m^2 of liquid water equals ~0.0394 in (1 mm = 0.0394 in).
+
+    Cities whose every lead-hour fetch fails are returned as `None` so
+    downstream blend code can distinguish "no HRRR data" from "legitimately
+    zero precipitation."
     """
-    results: dict[str, dict] = {}
+    results: dict[str, Optional[dict]] = {}
     for loc in locations:
         name = loc.get("name")
         if not name:
             continue
         try:
-            series = _extract_hrrr_apcp_series(loc, fxx=fxx, **kwargs)
+            series = _extract_hrrr_apcp_series(loc, fxx=fxx, run_time_utc=run_time_utc)
         except RuntimeError:
             raise
         except Exception as exc:
@@ -219,5 +240,14 @@ def fetch_hrrr_precip_multi(
                 continue
             total_mm = max(kg_values) - min(kg_values)  # 1 kg/m^2 ≈ 1 mm
             daily_totals[date_str] = {"total_in": _mm_to_in(total_mm)}
-        results[name] = daily_totals
+
+        if not daily_totals:
+            logger.warning(
+                "HRRR precip: 0/%d hours succeeded for %s",
+                int(fxx) + 1,
+                name,
+            )
+            results[name] = None
+        else:
+            results[name] = daily_totals
     return results
