@@ -113,8 +113,11 @@ def _summarize_ensemble_precip(payload: dict) -> dict:
     """Compute per-date wet-fraction and amount std across ensemble members."""
     hourly = payload.get("hourly") or {}
     times = hourly.get("time") or []
-    # Each member comes back as a key like "precipitation_member01"
-    member_keys = [k for k in hourly.keys() if k.startswith("precipitation")]
+    # Each member comes back as a key like "precipitation_member01".
+    # Open-Meteo also sometimes emits a bare "precipitation" series (the
+    # deterministic/control run) alongside members; exclude it — counting
+    # it as a member would inflate member_count and bias wet_fraction.
+    member_keys = [k for k in hourly.keys() if k.startswith("precipitation_member")]
     if not times or not member_keys:
         return {"daily": []}
 

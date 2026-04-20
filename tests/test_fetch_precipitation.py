@@ -50,3 +50,26 @@ def test_ensemble_precip_summarizer_computes_wet_fraction():
     assert apr21["ensemble_wet_fraction"] == pytest.approx(0.5)   # members 01 + 04 wet
     assert apr22["ensemble_wet_fraction"] == pytest.approx(0.5)   # members 02 + 04 wet
     assert apr21["member_count"] == 4
+
+
+def test_ensemble_precip_summarizer_excludes_bare_precipitation_series():
+    """Open-Meteo sometimes emits a bare "precipitation" key (the control run)
+    alongside "precipitation_memberNN" keys. The summarizer must exclude it —
+    counting it as a member would inflate member_count and skew wet_fraction.
+    """
+    from src.fetch_precipitation import _summarize_ensemble_precip
+
+    payload = {
+        "hourly": {
+            "time": ["2026-04-21T00:00", "2026-04-21T12:00"],
+            "precipitation": [5.0, 5.0],           # control/deterministic — must be ignored
+            "precipitation_member01": [0.0, 0.0],
+            "precipitation_member02": [0.0, 0.0],
+        }
+    }
+
+    result = _summarize_ensemble_precip(payload)
+    apr21 = next(d for d in result["daily"] if d["date"] == "2026-04-21")
+
+    assert apr21["member_count"] == 2  # not 3; the bare "precipitation" is excluded
+    assert apr21["ensemble_wet_fraction"] == 0.0  # both true members stayed dry
