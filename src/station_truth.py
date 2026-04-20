@@ -284,20 +284,28 @@ def _cdo_temp_tenths_c_to_f(value: Optional[float]) -> Optional[float]:
     return round((float(value) / 10.0) * 9.0 / 5.0 + 32.0, 2)
 
 
+def _cdo_precip_tenths_mm_to_in(value: Optional[float]) -> Optional[float]:
+    """Convert NCEI CDO PRCP value (tenths of mm) to inches."""
+    if value is None or pd.isna(value):
+        return None
+    # PRCP is reported in tenths of a millimeter; 1 inch = 25.4 mm = 254 tenths of mm.
+    return round(float(value) / 254.0, 3)
+
+
 def fetch_historical_daily(
     ghcnd_id: str,
     start: str | date | datetime,
     end: str | date | datetime,
     token: str,
 ) -> pd.DataFrame:
-    """Fetch GHCND daily TMAX/TMIN via NOAA CDO and return Fahrenheit values."""
+    """Fetch GHCND daily TMAX/TMIN/PRCP via NOAA CDO and return Fahrenheit/inch values."""
     if not token:
         raise ValueError("NCEI API token is required")
 
     params = {
         "datasetid": "GHCND",
         "stationid": _normalize_station_id(ghcnd_id),
-        "datatypeid": "TMAX,TMIN",
+        "datatypeid": "TMAX,TMIN,PRCP",
         "startdate": _normalize_date(start),
         "enddate": _normalize_date(end),
         "limit": 1000,
@@ -344,7 +352,7 @@ def fetch_historical_daily(
         params["offset"] = offset + limit
 
     if not rows:
-        return pd.DataFrame(columns=["date", "tmax_f", "tmin_f"])
+        return pd.DataFrame(columns=["date", "tmax_f", "tmin_f", "precip_in"])
 
     frame = pd.DataFrame(rows)
     frame["date"] = pd.to_datetime(frame["date"]).dt.date.astype(str)
@@ -354,14 +362,19 @@ def fetch_historical_daily(
         .rename_axis(None, axis=1)
     )
 
-    for column in ("TMAX", "TMIN"):
+    for column in ("TMAX", "TMIN", "PRCP"):
         if column not in pivot.columns:
             pivot[column] = pd.NA
 
     pivot["tmax_f"] = pivot["TMAX"].apply(_cdo_temp_tenths_c_to_f)
     pivot["tmin_f"] = pivot["TMIN"].apply(_cdo_temp_tenths_c_to_f)
+    pivot["precip_in"] = pivot["PRCP"].apply(_cdo_precip_tenths_mm_to_in)
 
-    return pivot[["date", "tmax_f", "tmin_f"]].sort_values("date").reset_index(drop=True)
+    return (
+        pivot[["date", "tmax_f", "tmin_f", "precip_in"]]
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
 
 
 def save_station_actuals(city: str, actuals: pd.DataFrame | dict, base_dir: Optional[Path | str] = None) -> Path:

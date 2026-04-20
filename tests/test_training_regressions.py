@@ -550,5 +550,42 @@ class TrainingRegressionTests(unittest.TestCase):
         self.assertIn("wired through the evaluator", lead_time["reason"])
 
 
+def test_ncei_cdo_request_includes_prcp(monkeypatch):
+    """NCEI CDO fetch must request PRCP alongside TMAX/TMIN."""
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["params"] = params
+
+        class _R:
+            status_code = 200
+
+            def json(self):
+                return {"results": []}
+
+            def raise_for_status(self):
+                pass
+
+        return _R()
+
+    import requests
+    from src import station_truth
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    station_truth.fetch_historical_daily(
+        ghcnd_id="USW00094728",
+        start="2025-04-01",
+        end="2025-04-05",
+        token="fake-token",
+    )
+
+    datatypes = captured["params"].get("datatypeid")
+    if isinstance(datatypes, list):
+        assert "PRCP" in datatypes
+    else:
+        assert "PRCP" in str(datatypes)
+    assert "TMAX" in str(datatypes) and "TMIN" in str(datatypes)
+
+
 if __name__ == "__main__":
     unittest.main()
