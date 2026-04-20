@@ -73,3 +73,29 @@ def test_ensemble_precip_summarizer_excludes_bare_precipitation_series():
 
     assert apr21["member_count"] == 2  # not 3; the bare "precipitation" is excluded
     assert apr21["ensemble_wet_fraction"] == 0.0  # both true members stayed dry
+
+
+def test_hrrr_precip_returns_daily_accumulation(monkeypatch):
+    """HRRR APCP extraction returns per-date cumulative inches per city."""
+    from src import fetch_precipitation
+
+    # Simulate extracted member timeseries
+    fake_series = [
+        {"valid_time": "2026-04-21T00:00:00", "apcp_kg_m2": 0.0},
+        {"valid_time": "2026-04-21T06:00:00", "apcp_kg_m2": 2.54},   # 0.1 in
+        {"valid_time": "2026-04-21T12:00:00", "apcp_kg_m2": 2.54},   # unchanged (no new rain)
+        {"valid_time": "2026-04-21T18:00:00", "apcp_kg_m2": 7.62},   # +0.2 in
+    ]
+
+    def fake_extract(loc, fxx, **kwargs):
+        return fake_series
+
+    monkeypatch.setattr(fetch_precipitation, "_extract_hrrr_apcp_series", fake_extract)
+
+    result = fetch_precipitation.fetch_hrrr_precip_multi(
+        [{"name": "New York", "lat": 40.7, "lon": -74.0}],
+        fxx=18,
+    )
+
+    ny = result["New York"]
+    assert ny["2026-04-21"]["total_in"] == pytest.approx(0.3, rel=1e-3)

@@ -149,3 +149,75 @@ def _summarize_ensemble_precip(payload: dict) -> dict:
             "member_count": len(member_totals),
         })
     return {"daily": daily_rows}
+
+
+def _extract_hrrr_apcp_series(location: dict, fxx: int, **kwargs) -> list[dict]:
+    """Return [{valid_time, apcp_kg_m2}, ...] from the latest HRRR run.
+
+    Uses Herbie the same way fetch_hrrr does, but requests the APCP variable.
+    Mirrors the fetch_hrrr import-failure handling (raises RuntimeError if
+    Herbie is unavailable so the caller can degrade gracefully).
+    """
+    try:
+        from herbie import Herbie
+    except ImportError as exc:
+        raise RuntimeError("Herbie not installed — HRRR precip unavailable") from exc
+
+    series: list[dict] = []
+    for hour in range(0, fxx + 1):
+        try:
+            H = Herbie(model="hrrr", product="sfc", fxx=hour)
+            ds = H.xarray(":APCP:surface")
+            val_kg_m2 = float(ds.sel(
+                latitude=location["lat"], longitude=location["lon"], method="nearest"
+            ).values)
+        except Exception as exc:
+            logger.debug("HRRR APCP extract failed at f%02d: %s", hour, exc)
+            continue
+        series.append({
+            "valid_time": str(ds.valid_time.values),
+            "apcp_kg_m2": val_kg_m2,
+        })
+    return series
+
+
+def fetch_hrrr_precip_multi(
+    locations: Iterable[dict],
+    fxx: int = 18,
+    **kwargs,
+) -> dict[str, dict]:
+    """Fetch HRRR accumulated precipitation for each location.
+
+    Returns: {city_name: {date: {"total_in": float}, ...}}
+
+    HRRR APCP is reset at the start of each run, so "total accumulation" for
+    a given date is the max APCP value observed on that date minus the first.
+    One kg/m^2 of liquid water equals ~0.0394 in (1 mm = 0.0394 in).
+    """
+    results: dict[str, dict] = {}
+    for loc in locations:
+        name = loc.get("name")
+        if not name:
+            continue
+        try:
+            series = _extract_hrrr_apcp_series(loc, fxx=fxx, **kwargs)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.warning("HRRR precip failed for %s: %s", name, exc)
+            continue
+
+        from collections import defaultdict
+        by_date: dict[str, list[float]] = defaultdict(list)
+        for row in series:
+            date_str = str(row["valid_time"])[:10]
+            by_date[date_str].append(row["apcp_kg_m2"])
+
+        daily_totals: dict[str, dict] = {}
+        for date_str, kg_values in by_date.items():
+            if not kg_values:
+                continue
+            total_mm = max(kg_values) - min(kg_values)  # 1 kg/m^2 ≈ 1 mm
+            daily_totals[date_str] = {"total_in": _mm_to_in(total_mm)}
+        results[name] = daily_totals
+    return results
