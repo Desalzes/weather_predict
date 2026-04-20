@@ -181,6 +181,11 @@ def match_kalshi_rain(
         abs_edge = abs(edge)
         if abs_edge < min_edge:
             continue
+        # P1 BUY-only posture (mirrors temp policy v4). Skip opportunities where
+        # our_prob < market_price, i.e. edge <= 0 -- we don't sell YES contracts
+        # at this stage. SELL / NO-side routing is a P1.5 concern.
+        if edge <= 0:
+            continue
 
         yes_outcome_true = True  # YES resolves if it rains; we compute our_prob for that
         opportunities.append({
@@ -192,16 +197,22 @@ def match_kalshi_rain(
             "market_date": market_date,
             "outcome": market.get("outcome") or market.get("yes_sub_title"),
             "position_side": position_side,
-            "our_probability": our_prob,
-            "raw_probability": raw_prob,
-            "market_price": market_price,
-            "edge": edge,
-            "abs_edge": abs_edge,
+            # `direction` mirrors matcher.match_kalshi_markets' opportunity shape
+            # so paper_trading.py Kelly sizing + side inference route rain
+            # opportunities identically to temperature opportunities.
+            "direction": "BUY",
+            "our_probability": round(our_prob, 4),
+            "raw_probability": round(raw_prob, 4),
+            "market_price": round(market_price, 4),
+            "edge": round(edge, 4),
+            "abs_edge": round(abs_edge, 4),
             "forecast_value_f": None,
             "forecast_blend_source": forecast_blend_source,
             "forecast_calibration_source": forecast_calibration_source,
             "probability_calibration_source": probability_calibration_source,
-            "hours_to_settlement": hours_to_settlement,
+            "hours_to_settlement": (
+                round(hours_to_settlement, 2) if hours_to_settlement is not None else None
+            ),
             "volume24hr": market.get("volume24hr") or market.get("volume_24h"),
             "yes_outcome": yes_outcome_true,
         })
