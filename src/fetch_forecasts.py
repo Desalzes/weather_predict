@@ -203,26 +203,29 @@ def fetch_previous_run_forecast(
 
     Returns both:
     - Hourly temperature at lead N (``temperature_2m_previous_day{N}``)
-    - Daily precipitation accumulation and probability at lead N
-      (``precipitation_sum_previous_day{N}``,
-       ``precipitation_probability_max_previous_day{N}``)
+    - Hourly precipitation at lead N (``precipitation_previous_day{N}``),
+      aggregated to per-day sums by this function
+    - Daily max precipitation probability (``precipitation_probability_max``,
+      plain daily var — the Previous Runs API does not support a
+      ``*_previous_day{N}`` suffix on daily variables, so this is the
+      historical forecast's probability output for each date in the range)
 
     The daily precipitation block is normalized into ``result["daily"]`` with
-    ``precipitation_sum_in`` (converted from mm) and
-    ``precipitation_probability_max`` (kept as percent, 0-100).
+    ``precipitation_sum_in`` (mm-total aggregated from hourly, converted to
+    inches) and ``precipitation_probability_max`` (kept as percent, 0-100).
     """
     if lead_days < 1:
         raise ValueError("lead_days must be >= 1")
 
     lead = int(lead_days)
-    hourly_variable = f"temperature_2m_previous_day{lead}"
-    daily_precip_sum = f"precipitation_sum_previous_day{lead}"
-    daily_precip_prob = f"precipitation_probability_max_previous_day{lead}"
+    hourly_temp = f"temperature_2m_previous_day{lead}"
+    hourly_precip = f"precipitation_previous_day{lead}"
+    daily_precip_prob = "precipitation_probability_max"
     params = {
         "latitude": latitude,
         "longitude": longitude,
-        "hourly": hourly_variable,
-        "daily": ",".join([daily_precip_sum, daily_precip_prob]),
+        "hourly": ",".join([hourly_temp, hourly_precip]),
+        "daily": daily_precip_prob,
         "start_date": _normalize_date(start_date),
         "end_date": _normalize_date(end_date),
         "models": model,
@@ -255,11 +258,25 @@ def fetch_previous_run_forecast(
 
     daily_raw = data.get("daily", {}) or {}
     daily_times = list(daily_raw.get("time", []) or [])
-    precip_mm = list(daily_raw.get(daily_precip_sum, []) or [])
     precip_prob = list(daily_raw.get(daily_precip_prob, []) or [])
+
+    hourly_raw = data.get("hourly", {}) or {}
+    hourly_times = list(hourly_raw.get("time", []) or [])
+    hourly_precip = list(hourly_raw.get(hourly_precip, []) or [])
+
+    precip_sum_by_date: dict[str, float] = {}
+    for i, t in enumerate(hourly_times):
+        if i >= len(hourly_precip):
+            break
+        value = hourly_precip[i]
+        if value is None:
+            continue
+        date_key = str(t)[:10]
+        precip_sum_by_date[date_key] = precip_sum_by_date.get(date_key, 0.0) + float(value)
+
     precip_in = [
-        None if (value is None) else float(value) / 25.4
-        for value in precip_mm
+        precip_sum_by_date[d] / 25.4 if d in precip_sum_by_date else None
+        for d in daily_times
     ]
 
     return {

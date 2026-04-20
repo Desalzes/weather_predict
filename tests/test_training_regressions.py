@@ -683,15 +683,21 @@ def test_fetch_previous_run_forecast_returns_precipitation(monkeypatch):
                 pass
 
             def json(self):
+                # Hourly precip totals 2.54 mm over 24 hours (0.1 inches).
+                # Open-Meteo Previous Runs API uses the *_previous_day{N}
+                # suffix on hourly variables only; for daily variables the
+                # plain name is used.
+                hourly_precip = [0.0] * 24
+                hourly_precip[12] = 2.54  # one wet hour in the middle
                 return {
                     "hourly": {
                         "time": [f"2025-04-01T{hour:02d}:00" for hour in range(24)],
                         "temperature_2m_previous_day1": [15.0] * 24,
+                        "precipitation_previous_day1": hourly_precip,
                     },
                     "daily": {
                         "time": ["2025-04-01"],
-                        "precipitation_sum_previous_day1": [0.12],
-                        "precipitation_probability_max_previous_day1": [78],
+                        "precipitation_probability_max": [78],
                     },
                     "hourly_units": {},
                     "timezone": "America/New_York",
@@ -710,15 +716,19 @@ def test_fetch_previous_run_forecast_returns_precipitation(monkeypatch):
     )
 
     assert result is not None
-    # Daily request variable was included in the Open-Meteo query string
+    # Hourly request variables include the per-lead precipitation variable
+    hourly_param = captured["params"].get("hourly", "")
+    assert "precipitation_previous_day1" in str(hourly_param)
+    assert "temperature_2m_previous_day1" in str(hourly_param)
+    # Daily request variable is the plain probability field (no _previous_day
+    # suffix — Open-Meteo does not support that on daily variables)
     daily_param = captured["params"].get("daily", "")
-    assert "precipitation_sum_previous_day1" in str(daily_param)
-    assert "precipitation_probability_max_previous_day1" in str(daily_param)
+    assert "precipitation_probability_max" in str(daily_param)
 
     daily = result.get("daily", {})
     assert daily.get("time") == ["2025-04-01"]
-    # mm -> inches conversion (0.12 mm ≈ 0.00472 in)
-    assert daily["precipitation_sum_in"][0] == pytest.approx(0.12 / 25.4, rel=1e-3)
+    # Hourly precipitation summed then converted: 2.54 mm / 25.4 = 0.1 in
+    assert daily["precipitation_sum_in"][0] == pytest.approx(0.1, rel=1e-3)
     # Probability is kept as percent in the raw payload (0-100)
     assert daily["precipitation_probability_max"][0] == 78
 
