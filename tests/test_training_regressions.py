@@ -587,5 +587,76 @@ def test_ncei_cdo_request_includes_prcp(monkeypatch):
     assert "TMAX" in str(datatypes) and "TMIN" in str(datatypes)
 
 
+def test_ncei_cdo_parses_prcp_tenths_mm_to_inches(monkeypatch):
+    """NCEI CDO parse path must convert PRCP tenths-of-mm to inches and leave missing days NaN."""
+    # Three dates:
+    #   2025-04-01 — PRCP=254 tenths-mm (1.0 in) with TMAX/TMIN
+    #   2025-04-02 — PRCP=127 tenths-mm (0.5 in) with TMAX/TMIN
+    #   2025-04-03 — PRCP=25  tenths-mm (~0.098 in) with TMAX/TMIN
+    #   2025-04-04 — TMAX/TMIN only, NO PRCP row (precip_in must be NaN)
+    results = [
+        {"date": "2025-04-01T00:00:00", "datatype": "TMAX", "value": 200},
+        {"date": "2025-04-01T00:00:00", "datatype": "TMIN", "value": 100},
+        {"date": "2025-04-01T00:00:00", "datatype": "PRCP", "value": 254},
+        {"date": "2025-04-02T00:00:00", "datatype": "TMAX", "value": 210},
+        {"date": "2025-04-02T00:00:00", "datatype": "TMIN", "value": 110},
+        {"date": "2025-04-02T00:00:00", "datatype": "PRCP", "value": 127},
+        {"date": "2025-04-03T00:00:00", "datatype": "TMAX", "value": 220},
+        {"date": "2025-04-03T00:00:00", "datatype": "TMIN", "value": 120},
+        {"date": "2025-04-03T00:00:00", "datatype": "PRCP", "value": 25},
+        {"date": "2025-04-04T00:00:00", "datatype": "TMAX", "value": 230},
+        {"date": "2025-04-04T00:00:00", "datatype": "TMIN", "value": 130},
+    ]
+
+    payload = {
+        "results": results,
+        "metadata": {
+            "resultset": {
+                "count": len(results),
+                "offset": 1,
+                "limit": 1000,
+            }
+        },
+    }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        class _R:
+            status_code = 200
+
+            def json(self):
+                return payload
+
+            def raise_for_status(self):
+                pass
+
+        return _R()
+
+    import requests
+    from src import station_truth
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    frame = station_truth.fetch_historical_daily(
+        ghcnd_id="USW00094728",
+        start="2025-04-01",
+        end="2025-04-04",
+        token="fake-token",
+    )
+
+    assert list(frame.columns) == ["date", "tmax_f", "tmin_f", "precip_in"]
+    assert len(frame) == 4
+
+    by_date = {row["date"]: row for _, row in frame.iterrows()}
+
+    # 254 tenths-mm -> exactly 1.0 in
+    assert by_date["2025-04-01"]["precip_in"] == 1.0
+    # 127 tenths-mm -> 0.5 in
+    assert by_date["2025-04-02"]["precip_in"] == 0.5
+    # 25 tenths-mm -> ~0.098 in (25/254 = 0.09842...; rounded to 3 decimals = 0.098)
+    assert by_date["2025-04-03"]["precip_in"] == 0.098
+    # 2025-04-04 has TMAX/TMIN but NO PRCP row -> precip_in must be NaN (not 0.0)
+    missing = by_date["2025-04-04"]["precip_in"]
+    assert pd.isna(missing), f"expected NaN for missing PRCP, got {missing!r}"
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -289,6 +289,8 @@ def _cdo_precip_tenths_mm_to_in(value: Optional[float]) -> Optional[float]:
     if value is None or pd.isna(value):
         return None
     # PRCP is reported in tenths of a millimeter; 1 inch = 25.4 mm = 254 tenths of mm.
+    # Rounding to 3 decimals (not 2) preserves single-tenth-mm readings (~0.004 in)
+    # that 2-decimal rounding would truncate to zero.
     return round(float(value) / 254.0, 3)
 
 
@@ -298,7 +300,13 @@ def fetch_historical_daily(
     end: str | date | datetime,
     token: str,
 ) -> pd.DataFrame:
-    """Fetch GHCND daily TMAX/TMIN/PRCP via NOAA CDO and return Fahrenheit/inch values."""
+    """Fetch GHCND daily TMAX/TMIN/PRCP via NOAA CDO and return Fahrenheit/inch values.
+
+    Returns a DataFrame with columns: ``date`` (YYYY-MM-DD string),
+    ``tmax_f`` and ``tmin_f`` (Fahrenheit), and ``precip_in`` (inches).
+    Note that CDO does not report trace precipitation — only numeric PRCP totals —
+    so ``precip_trace`` is populated only from the CLI path, never from this function.
+    """
     if not token:
         raise ValueError("NCEI API token is required")
 
