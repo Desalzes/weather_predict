@@ -63,6 +63,8 @@ P1 is designed so P2 and P3 are drop-ins, not rewrites.
 | `src/paper_trading.py` | Add `market_category` column to ledger (values: `temperature`, `rain`). Backfill legacy rows as `temperature`. Extend `summary.json` with a `category_breakdown` block (per-category PnL / ROI / trade count / realized correlation over trailing 30 days). |
 | `src/strategy_policy.py` | Category-aware filter: a policy file carries an implicit or explicit `market_category` scope; filtering routes opportunities to the matching policy. |
 | `main.py` | After the existing temperature `match_*` passes, run an analogous rain matcher pass when `enable_rain_vertical` is `true`. Rain opportunities flow through the rain policy and are logged alongside temperature trades with `market_category=rain`. |
+| `src/station_truth.py` | Extend NCEI CDO fetcher to also pull `PRCP` data type alongside `TMAX`/`TMIN`, so `station_actuals/*.csv` `precip_in` column is populated (currently empty for ~355/363 rows). |
+| `backfill_training_data.py` | Extend to backfill precipitation on both sides of the join: historical actuals from NCEI CDO `PRCP`, and historical one-day-ahead precipitation forecasts from Open-Meteo Previous Runs (`precipitation_sum`, `precipitation_probability_max`). |
 | `config.example.json` | Add rain-vertical keys (all default off). |
 | `data/CLAUDE.md`, `strategy/CLAUDE.md`, `src/CLAUDE.md`, `.claude/rules/` | Document the new vertical per the repo's docs conventions. |
 
@@ -213,6 +215,14 @@ Discovery-pass inventory may motivate a one-time adjustment to
 - `data/calibration_models/{city_slug}_rain_binary_logistic.pkl`
 - `data/calibration_models/{city_slug}_rain_binary_isotonic.pkl`
 
+### Station-Actuals Precipitation Backfill
+
+`data/station_actuals/*.csv` already has `precip_in` and `precip_trace`
+columns in its schema, but the column is empty for ~355 of 363 rows because
+the NCEI CDO fetcher currently only requests `TMAX`/`TMIN`. The extension to
+also pull `PRCP` lets the existing actuals files populate in place, no schema
+migration needed.
+
 ### Ledger Change
 
 Add `market_category` column to `data/paper_trades/ledger.csv`. Legacy rows
@@ -268,18 +278,29 @@ non-binary-threshold markets.
 
 ## Rollout Order
 
+0. **One-shot historical backfill.** Extend `backfill_training_data.py` and
+   the NCEI CDO path in `src/station_truth.py` to pull precipitation:
+   - Actuals: 365 days of NCEI CDO `PRCP` → fills the empty `precip_in`
+     column on existing `station_actuals/*.csv` rows.
+   - Forecasts: 365 days of Open-Meteo Previous Runs
+     (`precipitation_sum`, `precipitation_probability_max`) → creates
+     `data/precip_archive/*.csv` retroactively.
+   Outcome: day-1 chronological-holdout calibration is possible, matching
+   the temperature pipeline's starting position. Avoids the 60-day live-wait
+   before calibration models are trainable.
 1. **Discovery pass.** Run existing fetcher with `KXRAIN` enabled end-to-end;
    dump `data/rain_market_inventory.csv` (ticker, outcome, 24 h volume, city,
    date). First empirical reality check; may adjust `min_volume24hr` in v1
    policy.
 2. **`src/fetch_precipitation.py`** — Open-Meteo precip (deterministic +
-   ensemble) and HRRR APCP extraction at station points.
-3. **Archive immediately** — precipitation forecast snapshots start landing in
-   `data/precip_archive/` the moment the fetcher is wired, building training
-   data while the rest of P1 is being written.
-4. **`src/rain_calibration.py` + `train_rain_calibration.py`** — classes and
-   CLI trainer. Until ~60 days of archived precip + actuals exist, the live
-   pipeline uses pass-through raw Open-Meteo probability.
+   ensemble) and HRRR APCP extraction at station points. Live scanner starts
+   archiving to `data/precip_archive/` from first run alongside the backfilled
+   history.
+3. **`src/rain_calibration.py` + `train_rain_calibration.py`** — classes and
+   CLI trainer. Runs against the backfilled archive on day 1; no live-wait.
+4. **`evaluate_rain_calibration.py`** — chronological holdout evaluation
+   against the backfilled archive. Produces first Brier / log-loss scorecard
+   before any live paper trade is placed.
 5. **`src/rain_matcher.py`** — probability → contract edge, mirroring
    `matcher.py` opportunity shape.
 6. **`strategy/rain_policy_v1.json` + category-aware filter in
@@ -289,7 +310,9 @@ non-binary-threshold markets.
 8. **Tests** — mirror existing temperature coverage: matcher, calibration,
    policy filter, settlement, telemetry, end-to-end paper-trade round trip.
 9. **Wire into `main.py`** behind `enable_rain_vertical` flag.
-10. **Go live (paper).** 30-day evaluation window begins.
+10. **Go live (paper).** 30-day evaluation window begins. Execution model:
+    BUY-only on `yes` side, hold to settlement, no mid-market exits (matches
+    existing paper-trading behavior in `src/paper_trading.py`).
 11. **Evaluation gate** — review Brier, log-loss, ROI, and correlation. If all
     three promotion criteria pass, begin real-money consideration discussion.
     If any fail, diagnose and iterate before a v2 policy.
