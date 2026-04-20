@@ -93,3 +93,67 @@ def test_rain_calibration_manager_returns_none_when_no_models(tmp_path):
 
     mgr = RainCalibrationManager(model_dir=tmp_path)
     assert mgr.calibrate_rain_probability(city="New York", raw_prob=0.5) is None
+
+
+def test_isotonic_rain_calibrator_save_load(tmp_path):
+    import numpy as np
+    from src.rain_calibration import IsotonicRainCalibrator
+
+    rng = np.random.default_rng(13)
+    preds = np.linspace(0.05, 0.95, 200)
+    outcomes = (rng.uniform(0, 1, 200) < preds).astype(int)
+
+    cal = IsotonicRainCalibrator(city="New York")
+    cal.fit(preds, outcomes)
+    path = tmp_path / "new_york_rain_binary_isotonic.pkl"
+    cal.save(path)
+
+    loaded = IsotonicRainCalibrator.load(path)
+    assert loaded.city == "New York"
+    assert abs(loaded.predict(0.4) - cal.predict(0.4)) < 1e-9
+    assert abs(loaded.predict(0.8) - cal.predict(0.8)) < 1e-9
+
+
+def test_rain_calibration_manager_only_logistic(tmp_path):
+    """If only the logistic model is present, the manager should apply it
+    and mark probability_calibration_source as 'raw'."""
+    import numpy as np
+    from src.rain_calibration import LogisticRainCalibrator, RainCalibrationManager
+
+    rng = np.random.default_rng(5)
+    probs = rng.uniform(0.05, 0.95, 150)
+    outcomes = (rng.uniform(0, 1, 150) < probs).astype(int)
+    logistic = LogisticRainCalibrator(city="New York")
+    logistic.fit(probs, outcomes)
+    logistic.save(tmp_path / "new_york_rain_binary_logistic.pkl")
+    # Do NOT save the isotonic model.
+
+    mgr = RainCalibrationManager(model_dir=tmp_path)
+    result = mgr.calibrate_rain_probability(city="New York", raw_prob=0.42)
+
+    assert result is not None
+    assert result["forecast_calibration_source"] == "logistic"
+    assert result["probability_calibration_source"] == "raw"
+
+
+def test_rain_calibration_manager_only_isotonic(tmp_path):
+    """If only the isotonic model is present, the manager should skip
+    logistic but still apply isotonic and mark forecast_calibration_source
+    as 'raw'."""
+    import numpy as np
+    from src.rain_calibration import IsotonicRainCalibrator, RainCalibrationManager
+
+    rng = np.random.default_rng(6)
+    probs = rng.uniform(0.05, 0.95, 150)
+    outcomes = (rng.uniform(0, 1, 150) < probs).astype(int)
+    isotonic = IsotonicRainCalibrator(city="New York")
+    isotonic.fit(probs, outcomes)
+    isotonic.save(tmp_path / "new_york_rain_binary_isotonic.pkl")
+    # Do NOT save the logistic model.
+
+    mgr = RainCalibrationManager(model_dir=tmp_path)
+    result = mgr.calibrate_rain_probability(city="New York", raw_prob=0.42)
+
+    assert result is not None
+    assert result["forecast_calibration_source"] == "raw"
+    assert result["probability_calibration_source"] == "isotonic"

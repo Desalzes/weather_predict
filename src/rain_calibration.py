@@ -100,6 +100,9 @@ class IsotonicRainCalibrator:
         return obj
 
 
+# SECURITY: pickle.load trusts any file in model_dir. Never expose
+# RainCalibrationManager(model_dir=...) to untrusted input (CLI flags,
+# config values influenced by users). model_dir is internal-only.
 def _rain_model_path(city: str, kind: str, model_dir=None) -> Path:
     """Return the on-disk path for a rain calibration model.
 
