@@ -30,7 +30,20 @@ STATIONS_PATH = PROJECT_ROOT / "stations.json"
 DATA_DIR = PROJECT_ROOT / "data"
 STATION_ACTUALS_DIR = DATA_DIR / "station_actuals"
 FORECAST_ARCHIVE_DIR = DATA_DIR / "forecast_archive"
+PRECIP_ARCHIVE_DIR = DATA_DIR / "precip_archive"
 CALIBRATION_MODELS_DIR = DATA_DIR / "calibration_models"
+
+_PRECIP_ARCHIVE_COLUMNS = [
+    "as_of_utc",
+    "date",
+    "forecast_prob_any_rain",
+    "forecast_amount_in",
+    "ensemble_wet_fraction",
+    "ensemble_amount_std_in",
+    "forecast_model",
+    "forecast_lead_days",
+    "forecast_source",
+]
 
 _CLI_URL = "https://forecast.weather.gov/product.php"
 _CDO_URL = "https://www.ncei.noaa.gov/cdo-web/api/v2/data"
@@ -87,6 +100,7 @@ def ensure_data_directories() -> dict[str, Path]:
         "data": DATA_DIR,
         "station_actuals": STATION_ACTUALS_DIR,
         "forecast_archive": FORECAST_ARCHIVE_DIR,
+        "precip_archive": PRECIP_ARCHIVE_DIR,
         "calibration_models": CALIBRATION_MODELS_DIR,
     }
     for path in paths.values():
@@ -636,6 +650,64 @@ def archive_previous_run_forecast(
         return path
 
     frame = pd.DataFrame(rows)
+    if path.exists():
+        existing = pd.read_csv(path)
+        combined = pd.concat([existing, frame], ignore_index=True, sort=False)
+    else:
+        combined = frame
+
+    combined = combined.drop_duplicates(subset=["as_of_utc", "date"], keep="last")
+    combined = combined.sort_values(["as_of_utc", "date"])
+    combined.to_csv(path, index=False)
+    return path
+
+
+def archive_previous_run_precipitation(
+    city: str,
+    snapshot: dict,
+    *,
+    base_dir: Optional[Path | str] = None,
+) -> Path:
+    """Archive a single-day precipitation snapshot from a previous-run forecast.
+
+    Expected keys on ``snapshot``:
+    - ``date`` (YYYY-MM-DD)
+    - ``precipitation_sum_in`` (inches, may be None)
+    - ``precipitation_probability_max`` (percent 0-100, may be None)
+    - ``lead_days`` (optional, int)
+    - ``as_of_utc`` (optional, ISO-8601 string)
+    - ``forecast_source`` (optional; defaults to "open_meteo_previous_runs")
+    - ``forecast_model`` (optional; defaults to "best_match")
+    """
+    directory = Path(base_dir) if base_dir is not None else PRECIP_ARCHIVE_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{_slugify_city(city)}.csv"
+
+    prob = snapshot.get("precipitation_probability_max")
+    try:
+        prob_fraction = None if prob is None else float(prob) / 100.0
+    except (TypeError, ValueError):
+        prob_fraction = None
+
+    amount_in = snapshot.get("precipitation_sum_in")
+    try:
+        amount_value = None if amount_in is None else float(amount_in)
+    except (TypeError, ValueError):
+        amount_value = None
+
+    row = {
+        "as_of_utc": snapshot.get("as_of_utc"),
+        "date": snapshot.get("date"),
+        "forecast_prob_any_rain": prob_fraction,
+        "forecast_amount_in": amount_value,
+        "ensemble_wet_fraction": None,
+        "ensemble_amount_std_in": None,
+        "forecast_model": snapshot.get("forecast_model", "best_match"),
+        "forecast_lead_days": snapshot.get("lead_days"),
+        "forecast_source": snapshot.get("forecast_source", "open_meteo_previous_runs"),
+    }
+
+    frame = pd.DataFrame([row], columns=_PRECIP_ARCHIVE_COLUMNS)
     if path.exists():
         existing = pd.read_csv(path)
         combined = pd.concat([existing, frame], ignore_index=True, sort=False)

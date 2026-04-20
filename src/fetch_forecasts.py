@@ -199,15 +199,30 @@ def fetch_previous_run_forecast(
     lead_days: int = 1,
     model: str = "best_match",
 ) -> Optional[dict]:
-    """Fetch archived previous-day forecasts for a date range."""
+    """Fetch archived previous-day forecasts for a date range.
+
+    Returns both:
+    - Hourly temperature at lead N (``temperature_2m_previous_day{N}``)
+    - Daily precipitation accumulation and probability at lead N
+      (``precipitation_sum_previous_day{N}``,
+       ``precipitation_probability_max_previous_day{N}``)
+
+    The daily precipitation block is normalized into ``result["daily"]`` with
+    ``precipitation_sum_in`` (converted from mm) and
+    ``precipitation_probability_max`` (kept as percent, 0-100).
+    """
     if lead_days < 1:
         raise ValueError("lead_days must be >= 1")
 
-    variable = f"temperature_2m_previous_day{int(lead_days)}"
+    lead = int(lead_days)
+    hourly_variable = f"temperature_2m_previous_day{lead}"
+    daily_precip_sum = f"precipitation_sum_previous_day{lead}"
+    daily_precip_prob = f"precipitation_probability_max_previous_day{lead}"
     params = {
         "latitude": latitude,
         "longitude": longitude,
-        "hourly": variable,
+        "hourly": hourly_variable,
+        "daily": ",".join([daily_precip_sum, daily_precip_prob]),
         "start_date": _normalize_date(start_date),
         "end_date": _normalize_date(end_date),
         "models": model,
@@ -238,6 +253,15 @@ def fetch_previous_run_forecast(
         )
         return None
 
+    daily_raw = data.get("daily", {}) or {}
+    daily_times = list(daily_raw.get("time", []) or [])
+    precip_mm = list(daily_raw.get(daily_precip_sum, []) or [])
+    precip_prob = list(daily_raw.get(daily_precip_prob, []) or [])
+    precip_in = [
+        None if (value is None) else float(value) / 25.4
+        for value in precip_mm
+    ]
+
     return {
         "location": {"lat": latitude, "lon": longitude},
         "hourly": data.get("hourly", {}),
@@ -245,5 +269,10 @@ def fetch_previous_run_forecast(
         "timezone": data.get("timezone"),
         "timezone_abbreviation": data.get("timezone_abbreviation"),
         "model": model,
-        "lead_days": int(lead_days),
+        "lead_days": lead,
+        "daily": {
+            "time": daily_times,
+            "precipitation_sum_in": precip_in,
+            "precipitation_probability_max": precip_prob,
+        },
     }

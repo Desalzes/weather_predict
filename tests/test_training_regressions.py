@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
+import pytest
 
 from evaluate_calibration import (
     _report_level_limitations,
@@ -656,6 +657,99 @@ def test_ncei_cdo_parses_prcp_tenths_mm_to_inches(monkeypatch):
     # 2025-04-04 has TMAX/TMIN but NO PRCP row -> precip_in must be NaN (not 0.0)
     missing = by_date["2025-04-04"]["precip_in"]
     assert pd.isna(missing), f"expected NaN for missing PRCP, got {missing!r}"
+
+
+def test_fetch_previous_run_forecast_returns_precipitation(monkeypatch):
+    """Previous-run forecast must expose precipitation_sum and probability.
+
+    The real function returns a multi-day hourly payload for a date range
+    rather than a single-day snapshot. Adapt the plan's mock/call shape to
+    match that, but keep the two new precipitation field names intact: they
+    are consumed by `archive_previous_run_precipitation` downstream.
+    """
+    import requests
+    from src import fetch_forecasts
+
+    captured = {}
+
+    def fake_get(url, params=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+
+        class _R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "hourly": {
+                        "time": [f"2025-04-01T{hour:02d}:00" for hour in range(24)],
+                        "temperature_2m_previous_day1": [15.0] * 24,
+                    },
+                    "daily": {
+                        "time": ["2025-04-01"],
+                        "precipitation_sum_previous_day1": [0.12],
+                        "precipitation_probability_max_previous_day1": [78],
+                    },
+                    "hourly_units": {},
+                    "timezone": "America/New_York",
+                }
+
+        return _R()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = fetch_forecasts.fetch_previous_run_forecast(
+        latitude=40.7,
+        longitude=-74.0,
+        start_date="2025-04-01",
+        end_date="2025-04-01",
+        lead_days=1,
+    )
+
+    assert result is not None
+    # Daily request variable was included in the Open-Meteo query string
+    daily_param = captured["params"].get("daily", "")
+    assert "precipitation_sum_previous_day1" in str(daily_param)
+    assert "precipitation_probability_max_previous_day1" in str(daily_param)
+
+    daily = result.get("daily", {})
+    assert daily.get("time") == ["2025-04-01"]
+    # mm -> inches conversion (0.12 mm ≈ 0.00472 in)
+    assert daily["precipitation_sum_in"][0] == pytest.approx(0.12 / 25.4, rel=1e-3)
+    # Probability is kept as percent in the raw payload (0-100)
+    assert daily["precipitation_probability_max"][0] == 78
+
+
+def test_archive_previous_run_precipitation_writes_expected_row(tmp_path):
+    """`archive_previous_run_precipitation` must persist a normalized row."""
+    from src import station_truth
+
+    precip_dir = tmp_path / "precip_archive"
+    snapshot = {
+        "date": "2025-04-01",
+        "precipitation_sum_in": 0.12,
+        "precipitation_probability_max": 78,
+        "lead_days": 1,
+        "as_of_utc": "2025-03-31T12:00:00+00:00",
+        "forecast_source": "open_meteo_previous_runs",
+    }
+
+    station_truth.archive_previous_run_precipitation(
+        city="New York",
+        snapshot=snapshot,
+        base_dir=precip_dir,
+    )
+
+    df = pd.read_csv(precip_dir / "new_york.csv")
+    assert df.iloc[0]["date"] == "2025-04-01"
+    assert df.iloc[0]["forecast_amount_in"] == pytest.approx(0.12, rel=1e-3)
+    # Probability percent (0-100) is converted to a fraction (0-1) on write
+    assert df.iloc[0]["forecast_prob_any_rain"] == pytest.approx(0.78, rel=1e-3)
+    assert df.iloc[0]["forecast_lead_days"] == 1
+    assert df.iloc[0]["forecast_source"] == "open_meteo_previous_runs"
 
 
 if __name__ == "__main__":
