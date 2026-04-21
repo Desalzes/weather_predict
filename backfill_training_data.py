@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -25,8 +25,10 @@ from src.logging_setup import configure_logging, set_log_level
 from src.station_truth import (
     CALIBRATION_MODELS_DIR,
     FORECAST_ARCHIVE_DIR,
+    PRECIP_ARCHIVE_DIR,
     STATION_ACTUALS_DIR,
     archive_previous_run_forecast,
+    archive_previous_run_precipitation,
     backfill_station_actuals,
     backfill_station_actuals_from_cli_archive,
     build_training_set,
@@ -79,6 +81,7 @@ def main() -> None:
     parser.add_argument("--forecast-model", default="best_match", help="Open-Meteo previous-runs model")
     parser.add_argument("--station-actuals-dir", help="Override station actuals directory")
     parser.add_argument("--forecast-archive-dir", help="Override forecast archive directory")
+    parser.add_argument("--precip-archive-dir", help="Override precipitation archive directory")
     parser.add_argument("--train-window-days", type=int, default=365, help="Window used when reporting overlap")
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     args = parser.parse_args()
@@ -91,6 +94,7 @@ def main() -> None:
 
     station_actuals_dir = Path(args.station_actuals_dir or STATION_ACTUALS_DIR)
     forecast_archive_dir = Path(args.forecast_archive_dir or FORECAST_ARCHIVE_DIR)
+    precip_archive_dir = Path(args.precip_archive_dir or PRECIP_ARCHIVE_DIR)
     station_map = load_station_map()
     cities = [args.city] if args.city else list(station_map.keys())
     start_date, end_date = args.start, args.end
@@ -161,6 +165,44 @@ def main() -> None:
                 base_dir=forecast_archive_dir,
             )
             archive_start, archive_end, archive_rows = _load_csv_dates(archive_path)
+
+            # Archive precipitation snapshots alongside the temperature archive.
+            daily_block = forecast.get("daily", {}) if isinstance(forecast, dict) else {}
+            daily_times = list(daily_block.get("time", []) or [])
+            precip_sum_series = list(daily_block.get("precipitation_sum_in", []) or [])
+            precip_prob_series = list(daily_block.get("precipitation_probability_max", []) or [])
+            precip_rows_written = 0
+            for idx, target_date in enumerate(daily_times):
+                if actual_start and str(target_date) < actual_start:
+                    continue
+                if actual_end and str(target_date) > actual_end:
+                    continue
+                precip_sum_in = precip_sum_series[idx] if idx < len(precip_sum_series) else None
+                precip_prob = precip_prob_series[idx] if idx < len(precip_prob_series) else None
+                if precip_sum_in is None and precip_prob is None:
+                    continue
+                as_of_dt = datetime.combine(
+                    datetime.fromisoformat(str(target_date)).date() - timedelta(days=int(args.lead_days)),
+                    time(hour=12),
+                    tzinfo=timezone.utc,
+                )
+                snapshot = {
+                    "date": str(target_date),
+                    "precipitation_sum_in": precip_sum_in,
+                    "precipitation_probability_max": precip_prob,
+                    "lead_days": int(args.lead_days),
+                    "as_of_utc": as_of_dt.isoformat(),
+                    "forecast_model": args.forecast_model,
+                    "forecast_source": "open_meteo_previous_runs",
+                }
+                archive_previous_run_precipitation(
+                    city=city,
+                    snapshot=snapshot,
+                    base_dir=precip_archive_dir,
+                )
+                precip_rows_written += 1
+            if precip_rows_written:
+                log.info("%s: archived %d precipitation snapshots", city, precip_rows_written)
 
             training_df = build_training_set(
                 city,

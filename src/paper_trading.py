@@ -40,6 +40,7 @@ OBJECT_COLUMNS = [
     "market_question",
     "city",
     "market_type",
+    "market_category",
     "market_date",
     "outcome",
     "position_side",
@@ -65,6 +66,7 @@ LEDGER_COLUMNS = [
     "market_question",
     "city",
     "market_type",
+    "market_category",
     "market_date",
     "outcome",
     "position_side",
@@ -334,11 +336,26 @@ def _apply_routing_metadata_defaults(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _ensure_ledger_schema(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Backfill newly-introduced ledger columns on legacy frames.
+
+    Currently guarantees ``market_category`` exists and defaults missing
+    entries to ``"temperature"``. Preserves any existing migration logic
+    performed downstream (e.g. ``legacy_unknown`` routing backfill).
+    """
+    if "market_category" not in df.columns:
+        df["market_category"] = "temperature"
+    else:
+        df["market_category"] = df["market_category"].fillna("temperature")
+    return df
+
+
 def _load_ledger_frame(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=LEDGER_COLUMNS)
 
     frame = pd.read_csv(path)
+    frame = _ensure_ledger_schema(frame)
     for column in LEDGER_COLUMNS:
         if column not in frame.columns:
             frame[column] = pd.NA
@@ -428,6 +445,7 @@ def paper_trade_record_from_opportunity(
         "market_question": opportunity.get("market_question"),
         "city": opportunity.get("city"),
         "market_type": opportunity.get("market_type"),
+        "market_category": _coerce_text(opportunity.get("market_category"), default="temperature"),
         "market_date": _normalize_date(opportunity.get("market_date")),
         "outcome": opportunity.get("outcome"),
         "position_side": side,
@@ -1066,6 +1084,58 @@ def _settled_profitability_metrics(frame: pd.DataFrame) -> dict:
     }
 
 
+def _compute_category_breakdown(settled_df) -> dict:
+    """Per-category PnL/ROI/trade counts + daily-PnL Pearson correlation
+    over the trailing 30 days, used by the rain-vertical promotion gate."""
+    import pandas as pd
+
+    empty = {
+        "temperature": {"trade_count": 0, "pnl": 0.0, "roi": 0.0, "fees": 0.0},
+        "rain": {"trade_count": 0, "pnl": 0.0, "roi": 0.0, "fees": 0.0},
+        "correlation_30d": None,
+        "correlation_sample_size": 0,
+    }
+    if settled_df.empty:
+        return empty
+
+    result = {}
+    for category in ("temperature", "rain"):
+        sub = settled_df[settled_df["market_category"] == category]
+        if sub.empty:
+            result[category] = {"trade_count": 0, "pnl": 0.0, "roi": 0.0, "fees": 0.0}
+            continue
+        entry_cost = float(pd.to_numeric(sub["entry_cost"], errors="coerce").fillna(0).sum())
+        pnl_sum = float(pd.to_numeric(sub["pnl"], errors="coerce").fillna(0).sum())
+        fees_sum = float(pd.to_numeric(sub["total_fees"], errors="coerce").fillna(0).sum())
+        result[category] = {
+            "trade_count": int(len(sub)),
+            "pnl": pnl_sum,
+            "roi": (pnl_sum / entry_cost) if entry_cost else 0.0,
+            "fees": fees_sum,
+        }
+
+    # Daily-PnL Pearson correlation over trailing 30 days (by market_date)
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
+    recent = settled_df[settled_df["market_date"] >= cutoff]
+    temp_daily = (
+        recent[recent["market_category"] == "temperature"]
+        .groupby("market_date")["pnl"].sum()
+    )
+    rain_daily = (
+        recent[recent["market_category"] == "rain"]
+        .groupby("market_date")["pnl"].sum()
+    )
+    merged = temp_daily.to_frame("t").join(rain_daily.to_frame("r"), how="inner")
+    if len(merged) >= 2 and merged["t"].std() > 0 and merged["r"].std() > 0:
+        corr = float(merged["t"].corr(merged["r"]))
+    else:
+        corr = None
+    result["correlation_30d"] = corr
+    result["correlation_sample_size"] = int(len(merged))
+    return result
+
+
 def _forecast_calibration_source_breakdown(frame: pd.DataFrame) -> dict:
     if frame.empty:
         return {}
@@ -1090,6 +1160,7 @@ def _build_summary(
 ) -> dict:
     open_count = int((frame["status"].fillna("open") != "settled").sum())
     profitability = _settled_profitability_metrics(frame)
+    settled_df = frame.loc[frame["status"] == "settled"].copy()
 
     summary = {
         "ledger_path": str(ledger_path),
@@ -1098,6 +1169,7 @@ def _build_summary(
         "newly_settled_trades": int(newly_settled),
         **profitability,
         "forecast_calibration_source_breakdown": _forecast_calibration_source_breakdown(frame),
+        "category_breakdown": _compute_category_breakdown(settled_df),
     }
     if blocker_details:
         summary.update(blocker_details)

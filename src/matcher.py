@@ -775,11 +775,19 @@ def format_report(opportunities: list[dict]) -> str:
         if o.get("is_bucket"):
             mtype += "/B"
         hours = o.get("forecast_hours", "?")
+        fv = o.get("forecast_value_f")
+        fv_str = f"{fv:>5.1f}\u00b0" if isinstance(fv, (int, float)) else f"{'--':>6}"
+        vol = o.get("volume24hr")
+        try:
+            vol_str = f"{int(vol):>10,}" if vol is not None else f"{'--':>10}"
+        except (TypeError, ValueError):
+            vol_str = f"{'--':>10}"
+        outcome = str(o.get("outcome") or "")
         lines.append(
-            f"{src:<10} {o['city']:<16} {mtype:<7} "
-            f"{o['outcome']:<14} {mdate:<11} {o['forecast_value_f']:>5.1f}\u00b0 "
+            f"{src:<10} {o.get('city', ''):<16} {mtype:<7} "
+            f"{outcome:<14} {mdate:<11} {fv_str} "
             f"{hours:>4} {o['our_probability']:>5.0%} {o['market_price']:>5.0%} "
-            f"{o['edge']:>+6.0%} {o['direction']:>5} {o['volume24hr']:>10,}"
+            f"{o['edge']:>+6.0%} {o['direction']:>5} {vol_str}"
         )
 
     return "\n".join(lines)

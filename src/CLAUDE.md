@@ -20,8 +20,11 @@ fetch_kalshi / fetch_polymarket                          ↓
 | `fetch_hrrr.py` | HRRR 2-m temp via Herbie (optional dep, degrades gracefully) |
 | `fetch_kalshi.py` | Kalshi market discovery with 5-min cache, city-code mapping |
 | `fetch_polymarket.py` | Polymarket Gamma API with 5-min cache, city-alias mapping |
+| `fetch_precipitation.py` | Open-Meteo precip (deterministic + ensemble) + HRRR APCP extraction |
 | `kalshi_client.py` | Authenticated Kalshi REST client (RSA-PSS SHA-256 signatures) |
 | `matcher.py` | Normal-CDF probability for threshold/bucket markets, edge computation |
+| `rain_calibration.py` | Logistic + Isotonic rain-probability calibrators + RainCalibrationManager |
+| `rain_matcher.py` | Parse KXRAIN binary outcomes, compute probability & edge, mirror temp opportunity shape |
 | `calibration.py` | EMOS (linear bias correction) + isotonic (probability recalibration) |
 | `station_truth.py` | NWS CLI + NCEI CDO truth ingestion, training-set joins |
 | `paper_trading.py` | Ledger logging, deterministic fee accounting, settlement |

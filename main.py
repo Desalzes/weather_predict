@@ -299,6 +299,57 @@ def run_scan(
         except Exception as exc:
             log.warning("Kalshi match failed: %s", exc)
 
+    if config.get("enable_rain_vertical", False) and kalshi_markets:
+        try:
+            from src.fetch_precipitation import (
+                fetch_precipitation_multi,
+                fetch_precipitation_ensemble_multi,
+            )
+            from src.rain_matcher import match_kalshi_rain
+            from src.rain_calibration import RainCalibrationManager
+
+            rain_watchlist = config.get("rain_watchlist") or []
+            rain_locations = [loc for loc in locations if loc.get("name") in rain_watchlist]
+            if rain_locations:
+                log.info("Fetching rain forecasts for %d city(ies)...", len(rain_locations))
+                precip_forecasts = fetch_precipitation_multi(rain_locations, forecast_hours)
+
+                # Fold ensemble stats into the deterministic forecast daily rows
+                # so the archive writer (if any) sees a complete record.
+                try:
+                    ensemble_precip = fetch_precipitation_ensemble_multi(rain_locations, forecast_hours)
+                    for city, data in ensemble_precip.items():
+                        daily_lookup = {
+                            d["date"]: d
+                            for d in (precip_forecasts.get(city, {}).get("daily") or [])
+                        }
+                        for ens_day in data.get("daily", []):
+                            d = daily_lookup.get(ens_day["date"])
+                            if d is not None:
+                                d["ensemble_wet_fraction"] = ens_day.get("ensemble_wet_fraction")
+                                d["ensemble_amount_std_in"] = ens_day.get("ensemble_amount_std_in")
+                except Exception as exc:
+                    log.warning("Ensemble precip fetch failed: %s", exc)
+
+                rain_cal_mgr = RainCalibrationManager(model_dir=config.get("calibration_model_dir"))
+                rain_opps = match_kalshi_rain(
+                    precip_forecasts,
+                    kalshi_markets,
+                    calibration_manager=rain_cal_mgr,
+                    hrrr_data=None,  # HRRR-precip wiring is a future task
+                    hrrr_blend_horizon_hours=float(config.get("rain_hrrr_blend_horizon_hours", 12)),
+                    min_edge=float(config.get("rain_min_edge_threshold", 0.15)),
+                    now_utc=now_utc,
+                )
+                all_opportunities.extend(rain_opps)
+                log.info(
+                    "Rain: %d opportunities with edge >= %.0f%%",
+                    len(rain_opps),
+                    float(config.get("rain_min_edge_threshold", 0.15)) * 100,
+                )
+        except Exception as exc:
+            log.warning("Rain vertical failed: %s", exc)
+
     if poly_markets:
         try:
             from src.matcher import match_polymarket_markets
@@ -348,6 +399,22 @@ def run_scan(
         len(all_opportunities),
         strategy_policy_path,
     )
+
+    if config.get("enable_rain_vertical", False):
+        try:
+            rain_policy, rain_policy_path = load_strategy_policy(
+                config.get("rain_strategy_policy_path", "strategy/rain_policy_v1.json")
+            )
+            rain_trade_candidates = filter_opportunities_for_policy(all_opportunities, rain_policy)
+            trade_opportunities = trade_opportunities + rain_trade_candidates
+            log.info(
+                "Rain policy candidates: %d/%d from %s.",
+                len(rain_trade_candidates),
+                len(all_opportunities),
+                rain_policy_path,
+            )
+        except Exception as exc:
+            log.warning("Rain policy filter failed: %s", exc)
 
     deepseek_review = None
     if config.get("enable_deepseek_worker", False):

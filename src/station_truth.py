@@ -30,7 +30,20 @@ STATIONS_PATH = PROJECT_ROOT / "stations.json"
 DATA_DIR = PROJECT_ROOT / "data"
 STATION_ACTUALS_DIR = DATA_DIR / "station_actuals"
 FORECAST_ARCHIVE_DIR = DATA_DIR / "forecast_archive"
+PRECIP_ARCHIVE_DIR = DATA_DIR / "precip_archive"
 CALIBRATION_MODELS_DIR = DATA_DIR / "calibration_models"
+
+_PRECIP_ARCHIVE_COLUMNS = [
+    "as_of_utc",
+    "date",
+    "forecast_prob_any_rain",
+    "forecast_amount_in",
+    "ensemble_wet_fraction",
+    "ensemble_amount_std_in",
+    "forecast_model",
+    "forecast_lead_days",
+    "forecast_source",
+]
 
 _CLI_URL = "https://forecast.weather.gov/product.php"
 _CDO_URL = "https://www.ncei.noaa.gov/cdo-web/api/v2/data"
@@ -87,6 +100,7 @@ def ensure_data_directories() -> dict[str, Path]:
         "data": DATA_DIR,
         "station_actuals": STATION_ACTUALS_DIR,
         "forecast_archive": FORECAST_ARCHIVE_DIR,
+        "precip_archive": PRECIP_ARCHIVE_DIR,
         "calibration_models": CALIBRATION_MODELS_DIR,
     }
     for path in paths.values():
@@ -284,20 +298,36 @@ def _cdo_temp_tenths_c_to_f(value: Optional[float]) -> Optional[float]:
     return round((float(value) / 10.0) * 9.0 / 5.0 + 32.0, 2)
 
 
+def _cdo_precip_tenths_mm_to_in(value: Optional[float]) -> Optional[float]:
+    """Convert NCEI CDO PRCP value (tenths of mm) to inches."""
+    if value is None or pd.isna(value):
+        return None
+    # PRCP is reported in tenths of a millimeter; 1 inch = 25.4 mm = 254 tenths of mm.
+    # Rounding to 3 decimals (not 2) preserves single-tenth-mm readings (~0.004 in)
+    # that 2-decimal rounding would truncate to zero.
+    return round(float(value) / 254.0, 3)
+
+
 def fetch_historical_daily(
     ghcnd_id: str,
     start: str | date | datetime,
     end: str | date | datetime,
     token: str,
 ) -> pd.DataFrame:
-    """Fetch GHCND daily TMAX/TMIN via NOAA CDO and return Fahrenheit values."""
+    """Fetch GHCND daily TMAX/TMIN/PRCP via NOAA CDO and return Fahrenheit/inch values.
+
+    Returns a DataFrame with columns: ``date`` (YYYY-MM-DD string),
+    ``tmax_f`` and ``tmin_f`` (Fahrenheit), and ``precip_in`` (inches).
+    Note that CDO does not report trace precipitation — only numeric PRCP totals —
+    so ``precip_trace`` is populated only from the CLI path, never from this function.
+    """
     if not token:
         raise ValueError("NCEI API token is required")
 
     params = {
         "datasetid": "GHCND",
         "stationid": _normalize_station_id(ghcnd_id),
-        "datatypeid": "TMAX,TMIN",
+        "datatypeid": "TMAX,TMIN,PRCP",
         "startdate": _normalize_date(start),
         "enddate": _normalize_date(end),
         "limit": 1000,
@@ -344,7 +374,7 @@ def fetch_historical_daily(
         params["offset"] = offset + limit
 
     if not rows:
-        return pd.DataFrame(columns=["date", "tmax_f", "tmin_f"])
+        return pd.DataFrame(columns=["date", "tmax_f", "tmin_f", "precip_in"])
 
     frame = pd.DataFrame(rows)
     frame["date"] = pd.to_datetime(frame["date"]).dt.date.astype(str)
@@ -354,14 +384,19 @@ def fetch_historical_daily(
         .rename_axis(None, axis=1)
     )
 
-    for column in ("TMAX", "TMIN"):
+    for column in ("TMAX", "TMIN", "PRCP"):
         if column not in pivot.columns:
             pivot[column] = pd.NA
 
     pivot["tmax_f"] = pivot["TMAX"].apply(_cdo_temp_tenths_c_to_f)
     pivot["tmin_f"] = pivot["TMIN"].apply(_cdo_temp_tenths_c_to_f)
+    pivot["precip_in"] = pivot["PRCP"].apply(_cdo_precip_tenths_mm_to_in)
 
-    return pivot[["date", "tmax_f", "tmin_f"]].sort_values("date").reset_index(drop=True)
+    return (
+        pivot[["date", "tmax_f", "tmin_f", "precip_in"]]
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
 
 
 def save_station_actuals(city: str, actuals: pd.DataFrame | dict, base_dir: Optional[Path | str] = None) -> Path:
@@ -625,6 +660,119 @@ def archive_previous_run_forecast(
     combined = combined.sort_values(["as_of_utc", "date"])
     combined.to_csv(path, index=False)
     return path
+
+
+def archive_previous_run_precipitation(
+    city: str,
+    snapshot: dict,
+    *,
+    base_dir: Optional[Path | str] = None,
+) -> Path:
+    """Archive a single-day precipitation snapshot from a previous-run forecast.
+
+    Expected keys on ``snapshot``:
+    - ``date`` (YYYY-MM-DD)
+    - ``precipitation_sum_in`` (inches, may be None)
+    - ``precipitation_probability_max`` (percent 0-100, may be None)
+    - ``lead_days`` (optional, int)
+    - ``as_of_utc`` (optional, ISO-8601 string)
+    - ``forecast_source`` (optional; defaults to "open_meteo_previous_runs")
+    - ``forecast_model`` (optional; defaults to "best_match")
+    """
+    directory = Path(base_dir) if base_dir is not None else PRECIP_ARCHIVE_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{_slugify_city(city)}.csv"
+
+    prob = snapshot.get("precipitation_probability_max")
+    try:
+        prob_fraction = None if prob is None else float(prob) / 100.0
+    except (TypeError, ValueError):
+        prob_fraction = None
+
+    amount_in = snapshot.get("precipitation_sum_in")
+    try:
+        amount_value = None if amount_in is None else float(amount_in)
+    except (TypeError, ValueError):
+        amount_value = None
+
+    row = {
+        "as_of_utc": snapshot.get("as_of_utc"),
+        "date": snapshot.get("date"),
+        "forecast_prob_any_rain": prob_fraction,
+        "forecast_amount_in": amount_value,
+        "ensemble_wet_fraction": None,
+        "ensemble_amount_std_in": None,
+        "forecast_model": snapshot.get("forecast_model", "best_match"),
+        "forecast_lead_days": snapshot.get("lead_days"),
+        "forecast_source": snapshot.get("forecast_source", "open_meteo_previous_runs"),
+    }
+
+    frame = pd.DataFrame([row], columns=_PRECIP_ARCHIVE_COLUMNS)
+    if path.exists():
+        existing = pd.read_csv(path)
+        combined = pd.concat([existing, frame], ignore_index=True, sort=False)
+    else:
+        combined = frame
+
+    combined = combined.drop_duplicates(subset=["as_of_utc", "date"], keep="last")
+    combined = combined.sort_values(["as_of_utc", "date"])
+    combined.to_csv(path, index=False)
+    return path
+
+
+def build_rain_training_set(
+    city: str,
+    actuals_dir: Optional[Path | str] = None,
+    precip_dir: Optional[Path | str] = None,
+) -> pd.DataFrame:
+    """Join archived precipitation forecasts with station precip actuals.
+
+    Returns a DataFrame with columns:
+      date, raw_prob, forecast_amount_in, ensemble_wet_fraction,
+      ensemble_amount_std_in, actual_precip_in, actual_wet_0_1,
+      forecast_lead_days, as_of_utc.
+    """
+    actuals_dir = Path(actuals_dir) if actuals_dir is not None else STATION_ACTUALS_DIR
+    precip_dir = Path(precip_dir) if precip_dir is not None else PRECIP_ARCHIVE_DIR
+    slug = _slugify_city(city)
+    actuals_path = actuals_dir / f"{slug}.csv"
+    precip_path = precip_dir / f"{slug}.csv"
+    empty_cols = [
+        "date", "raw_prob", "forecast_amount_in", "ensemble_wet_fraction",
+        "ensemble_amount_std_in", "actual_precip_in", "actual_wet_0_1",
+        "forecast_lead_days", "as_of_utc",
+    ]
+    if not actuals_path.exists() or not precip_path.exists():
+        return pd.DataFrame(columns=empty_cols)
+
+    actuals = pd.read_csv(actuals_path)
+    precip = pd.read_csv(precip_path)
+    if precip.empty or actuals.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    # Prefer earliest lead-1 forecast per date (mirrors temp pipeline discipline).
+    precip["date"] = pd.to_datetime(precip["date"]).dt.strftime("%Y-%m-%d")
+    precip = precip.sort_values(["date", "forecast_lead_days", "as_of_utc"])
+    precip = precip.drop_duplicates("date", keep="first")
+
+    actuals["date"] = pd.to_datetime(actuals["date"]).dt.strftime("%Y-%m-%d")
+    if "precip_in" not in actuals.columns:
+        return pd.DataFrame(columns=empty_cols)
+
+    joined = precip.merge(actuals[["date", "precip_in"]], on="date", how="inner")
+    if joined.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    joined["actual_precip_in"] = pd.to_numeric(joined["precip_in"], errors="coerce")
+    joined["actual_wet_0_1"] = (joined["actual_precip_in"] >= 0.01).astype("Int64")
+
+    return joined.rename(
+        columns={"forecast_prob_any_rain": "raw_prob"}
+    )[[
+        "date", "raw_prob", "forecast_amount_in", "ensemble_wet_fraction",
+        "ensemble_amount_std_in", "actual_precip_in", "actual_wet_0_1",
+        "forecast_lead_days", "as_of_utc",
+    ]].reset_index(drop=True)
 
 
 def build_training_set(

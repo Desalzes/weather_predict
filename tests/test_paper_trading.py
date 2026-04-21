@@ -840,5 +840,97 @@ class PaperTradingTests(unittest.TestCase):
         cli_backfill_mock.assert_not_called()
 
 
+def test_log_paper_trades_records_market_category(tmp_path):
+    from src.paper_trading import log_paper_trades
+    opps = [{
+        "source": "kalshi", "ticker": "KXRAINNYC-26APR21-T0",
+        "market_category": "rain", "city": "New York", "market_type": "rain_binary",
+        "market_date": "2026-04-21", "outcome": "Yes", "position_side": "yes",
+        "direction": "BUY",
+        "our_probability": 0.8, "market_price": 0.55, "edge": 0.25,
+        "abs_edge": 0.25, "forecast_blend_source": "open-meteo",
+        "forecast_calibration_source": "logistic",
+        "probability_calibration_source": "isotonic",
+        "hours_to_settlement": 10, "raw_probability": 0.7,
+        "volume24hr": 1500, "yes_outcome": True,
+    }]
+    ledger = tmp_path / "ledger.csv"
+    log_paper_trades(opps, scan_timestamp="2026-04-20T12:00:00+00:00",
+                     ledger_path=ledger, contracts=1)
+    import pandas as pd
+    df = pd.read_csv(ledger)
+    assert "market_category" in df.columns
+    assert df.iloc[0]["market_category"] == "rain"
+
+
+def test_legacy_ledger_migrates_market_category_to_temperature(tmp_path):
+    import pandas as pd
+    from src.paper_trading import _ensure_ledger_schema
+
+    legacy = tmp_path / "legacy.csv"
+    pd.DataFrame({
+        "trade_id": ["t1"], "scan_id": ["s1"], "source": ["kalshi"],
+        "ticker": ["KXHIGHT"], "city": ["Boston"], "market_type": ["high"],
+        "market_date": ["2026-04-20"], "status": ["open"],
+    }).to_csv(legacy, index=False)
+
+    df = _ensure_ledger_schema(pd.read_csv(legacy))
+    assert "market_category" in df.columns
+    assert df.iloc[0]["market_category"] == "temperature"
+
+
+def test_settle_paper_trades_reports_category_breakdown(tmp_path):
+    """Summary must report per-category PnL/ROI/trade counts and a
+    daily-PnL Pearson correlation when both categories have settled rows."""
+    import pandas as pd
+    from src.paper_trading import settle_paper_trades
+
+    ledger = tmp_path / "ledger.csv"
+    rows = []
+    # Temperature: 5 settled trades across 5 distinct days
+    for i in range(5):
+        rows.append({
+            "trade_id": f"t{i}", "scan_id": "s", "status": "settled",
+            "source": "kalshi", "ticker": f"KXHIGHT-{i}", "market_category": "temperature",
+            "city": "New York", "market_type": "high",
+            "market_date": f"2026-04-{10+i:02d}", "outcome": "Yes", "position_side": "yes",
+            "direction": "BUY",
+            "contracts": 1, "entry_price": 0.5, "entry_cost": 0.5,
+            "payout": 1.0 if i % 2 == 0 else 0.0,
+            "pnl": 0.5 if i % 2 == 0 else -0.5,
+            "roi": 1.0 if i % 2 == 0 else -1.0,
+            "total_fees": 0, "entry_fee": 0, "settlement_fee": 0,
+            "yes_outcome": i % 2 == 0,
+            "settled_at_utc": f"2026-04-{10+i:02d}T23:00:00+00:00",
+        })
+    # Rain: 5 settled trades on the same 5 days
+    for i in range(5):
+        rows.append({
+            "trade_id": f"r{i}", "scan_id": "s", "status": "settled",
+            "source": "kalshi", "ticker": f"KXRAIN-{i}", "market_category": "rain",
+            "city": "New York", "market_type": "rain_binary",
+            "market_date": f"2026-04-{10+i:02d}", "outcome": "Yes", "position_side": "yes",
+            "direction": "BUY",
+            "contracts": 1, "entry_price": 0.5, "entry_cost": 0.5,
+            "payout": 1.0 if i == 0 else 0.0,
+            "pnl": 0.5 if i == 0 else -0.5,
+            "roi": 1.0 if i == 0 else -1.0,
+            "total_fees": 0, "entry_fee": 0, "settlement_fee": 0,
+            "yes_outcome": i == 0,
+            "settled_at_utc": f"2026-04-{10+i:02d}T23:00:00+00:00",
+        })
+    pd.DataFrame(rows).to_csv(ledger, index=False)
+
+    summary_path = tmp_path / "summary.json"
+    summary = settle_paper_trades(ledger_path=ledger, summary_path=summary_path)
+
+    cb = summary["category_breakdown"]
+    assert cb["temperature"]["trade_count"] == 5
+    assert cb["rain"]["trade_count"] == 5
+    # Correlation is a float in [-1, 1] when both series have variance
+    assert -1.0 <= cb["correlation_30d"] <= 1.0
+    assert cb["correlation_sample_size"] == 5
+
+
 if __name__ == "__main__":
     unittest.main()
