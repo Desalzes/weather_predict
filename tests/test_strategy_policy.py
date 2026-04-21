@@ -133,6 +133,151 @@ class StrategyPolicyTests(unittest.TestCase):
         filtered = filter_opportunities_for_policy(opportunities, policy)
         self.assertEqual(len(filtered), 1)
 
+    def test_allowed_position_sides_buy_only(self):
+        """allowed_position_sides: [yes] blocks SELL (no) trades."""
+        policy = {
+            "selection": {
+                "sources": ["kalshi"],
+                "min_abs_edge": 0.05,
+                "min_volume24hr": 0,
+                "max_candidates_per_scan": 10,
+                "allowed_position_sides": ["yes"],
+            }
+        }
+        opportunities = [
+            {
+                "source": "kalshi",
+                "city": "Phoenix",
+                "market_type": "high",
+                "abs_edge": 0.20,
+                "volume24hr": 5000,
+                "position_side": "yes",
+                "ticker": "BUY_YES",
+            },
+            {
+                "source": "kalshi",
+                "city": "Phoenix",
+                "market_type": "high",
+                "abs_edge": 0.30,
+                "volume24hr": 5000,
+                "position_side": "no",
+                "ticker": "SELL_NO",
+            },
+        ]
+
+        filtered = filter_opportunities_for_policy(opportunities, policy)
+
+        tickers = [item["ticker"] for item in filtered]
+        self.assertIn("BUY_YES", tickers)
+        self.assertNotIn("SELL_NO", tickers)
+
+    def test_empty_position_sides_allows_all(self):
+        """When allowed_position_sides is empty/absent, both yes and no pass."""
+        policy = {
+            "selection": {
+                "sources": ["kalshi"],
+                "min_abs_edge": 0.05,
+                "min_volume24hr": 0,
+                "max_candidates_per_scan": 10,
+            }
+        }
+        opportunities = [
+            {
+                "source": "kalshi",
+                "city": "Phoenix",
+                "market_type": "high",
+                "abs_edge": 0.20,
+                "volume24hr": 5000,
+                "position_side": "no",
+                "ticker": "SELL",
+            },
+        ]
+
+        filtered = filter_opportunities_for_policy(opportunities, policy)
+        self.assertEqual(len(filtered), 1)
+
+
+def test_filter_respects_market_category_scope():
+    """A policy that declares market_category must only see opportunities
+    with the matching market_category field. Legacy opportunities without
+    market_category default to 'temperature' to preserve existing behavior."""
+    from src.strategy_policy import filter_opportunities_for_policy
+
+    rain_policy = {
+        "market_category": "rain",
+        "selection": {
+            "sources": ["kalshi"],
+            "min_abs_edge": 0.10, "min_volume24hr": 0,
+            "max_candidates_per_scan": 5,
+            "max_hours_to_settlement": 48,
+            "allowed_market_types": ["rain_binary"],
+            "allowed_position_sides": ["yes"],
+            "allowed_cities": ["New York"],
+            "blocked_cities": [],
+        },
+    }
+    opps = [
+        {"source": "kalshi", "ticker": "KXRAINNYC-26APR21-T0", "market_category": "rain",
+         "city": "New York", "market_type": "rain_binary", "position_side": "yes",
+         "abs_edge": 0.2, "volume24hr": 1000, "hours_to_settlement": 12,
+         "direction": "BUY"},
+        {"source": "kalshi", "ticker": "KXHIGHTNYC-26APR21-T75", "market_category": "temperature",
+         "city": "New York", "market_type": "high", "position_side": "yes",
+         "abs_edge": 0.2, "volume24hr": 1000, "hours_to_settlement": 12,
+         "direction": "BUY"},
+    ]
+    result = filter_opportunities_for_policy(opps, rain_policy)
+    assert len(result) == 1
+    assert result[0]["market_category"] == "rain"
+
+
+def test_temperature_policy_without_category_still_accepts_legacy_opps():
+    """Policies without market_category should behave exactly as before —
+    legacy opportunities (no market_category key) must still be accepted."""
+    from src.strategy_policy import filter_opportunities_for_policy
+
+    policy = {
+        "selection": {
+            "sources": ["kalshi"], "min_abs_edge": 0.0, "min_volume24hr": 0,
+            "max_candidates_per_scan": 10, "max_hours_to_settlement": 48,
+            "allowed_market_types": ["high", "low"],
+            "allowed_position_sides": ["yes", "no"],
+            "allowed_cities": [], "blocked_cities": [],
+        },
+    }
+    opps = [
+        {"source": "kalshi", "ticker": "KXHIGHT", "city": "New York",
+         "market_type": "high", "position_side": "yes",
+         "abs_edge": 0.1, "volume24hr": 100, "hours_to_settlement": 12,
+         "direction": "BUY"},
+    ]
+    assert len(filter_opportunities_for_policy(opps, policy)) == 1
+
+
+def test_temperature_policy_with_category_rejects_rain_opps():
+    """When a policy explicitly declares market_category='temperature',
+    rain opportunities must be filtered out."""
+    from src.strategy_policy import filter_opportunities_for_policy
+
+    temp_policy = {
+        "market_category": "temperature",
+        "selection": {
+            "sources": ["kalshi"], "min_abs_edge": 0.0, "min_volume24hr": 0,
+            "max_candidates_per_scan": 10, "max_hours_to_settlement": 48,
+            "allowed_market_types": ["high", "low", "rain_binary"],
+            "allowed_position_sides": ["yes"],
+            "allowed_cities": [], "blocked_cities": [],
+        },
+    }
+    rain_opp = {
+        "source": "kalshi", "ticker": "KXRAINNYC-26APR21-T0",
+        "market_category": "rain", "city": "New York",
+        "market_type": "rain_binary", "position_side": "yes",
+        "abs_edge": 0.3, "volume24hr": 0, "hours_to_settlement": 12,
+        "direction": "BUY",
+    }
+    assert filter_opportunities_for_policy([rain_opp], temp_policy) == []
+
 
 if __name__ == "__main__":
     unittest.main()

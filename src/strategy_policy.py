@@ -90,6 +90,7 @@ def compact_policy_for_prompt(policy: dict) -> dict:
             "max_hours_to_settlement": selection.get("max_hours_to_settlement"),
             "allowed_market_types": selection.get("allowed_market_types", []),
             "allowed_settlement_rules": selection.get("allowed_settlement_rules", []),
+            "allowed_position_sides": selection.get("allowed_position_sides", []),
             "allowed_cities": selection.get("allowed_cities", []),
             "blocked_cities": selection.get("blocked_cities", []),
         },
@@ -106,6 +107,12 @@ def compact_policy_for_prompt(policy: dict) -> dict:
 
 
 def filter_opportunities_for_policy(opportunities: list[dict], policy: dict) -> list[dict]:
+    policy_category = (policy or {}).get("market_category")
+    if policy_category:
+        opportunities = [
+            o for o in opportunities
+            if (o.get("market_category") or "temperature") == policy_category
+        ]
     selection = policy.get("selection", {})
     allowed_sources = {
         str(item).strip().lower()
@@ -130,6 +137,11 @@ def filter_opportunities_for_policy(opportunities: list[dict], policy: dict) -> 
     allowed_settlement_rules = {
         str(item).strip().lower()
         for item in selection.get("allowed_settlement_rules", [])
+        if str(item).strip()
+    }
+    allowed_position_sides = {
+        str(item).strip().lower()
+        for item in selection.get("allowed_position_sides", [])
         if str(item).strip()
     }
     min_abs_edge = float(selection.get("min_abs_edge", 0.0) or 0.0)
@@ -157,6 +169,10 @@ def filter_opportunities_for_policy(opportunities: list[dict], policy: dict) -> 
         if allowed_settlement_rules:
             settlement_rule = str(opportunity.get("settlement_rule", "")).strip().lower()
             if settlement_rule and settlement_rule not in allowed_settlement_rules:
+                continue
+        if allowed_position_sides:
+            position_side = str(opportunity.get("position_side", "")).strip().lower()
+            if position_side and position_side not in allowed_position_sides:
                 continue
         if abs_edge < min_abs_edge:
             continue
