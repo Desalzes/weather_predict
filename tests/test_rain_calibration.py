@@ -157,3 +157,42 @@ def test_rain_calibration_manager_only_isotonic(tmp_path):
     assert result is not None
     assert result["forecast_calibration_source"] == "raw"
     assert result["probability_calibration_source"] == "isotonic"
+
+
+def test_build_rain_training_set_joins_forecasts_and_actuals(tmp_path):
+    from src import station_truth
+    import pandas as pd
+
+    actuals_dir = tmp_path / "station_actuals"
+    actuals_dir.mkdir()
+    pd.DataFrame({
+        "date": ["2026-04-01", "2026-04-02"],
+        "tmax_f": [70, 72], "tmin_f": [55, 58],
+        "precip_in": [0.0, 0.5],
+        "precip_trace": [False, False],
+        "cli_station": ["NYC", "NYC"], "source_url": ["", ""],
+        "city": ["New York", "New York"], "source": ["cdo", "cdo"], "archive_version": ["", ""],
+    }).to_csv(actuals_dir / "new_york.csv", index=False)
+
+    precip_dir = tmp_path / "precip_archive"
+    precip_dir.mkdir()
+    pd.DataFrame({
+        "as_of_utc": ["2026-03-31T12:00:00+00:00", "2026-04-01T12:00:00+00:00"],
+        "date": ["2026-04-01", "2026-04-02"],
+        "forecast_prob_any_rain": [0.15, 0.80],
+        "forecast_amount_in": [0.0, 0.3],
+        "ensemble_wet_fraction": [0.1, 0.75],
+        "ensemble_amount_std_in": [0.01, 0.2],
+        "forecast_model": ["best_match", "best_match"],
+        "forecast_lead_days": [1, 1],
+        "forecast_source": ["open_meteo_previous_runs"] * 2,
+    }).to_csv(precip_dir / "new_york.csv", index=False)
+
+    training = station_truth.build_rain_training_set(
+        city="New York",
+        actuals_dir=actuals_dir,
+        precip_dir=precip_dir,
+    )
+    assert list(training["date"]) == ["2026-04-01", "2026-04-02"]
+    assert list(training["actual_wet_0_1"]) == [0, 1]
+    assert list(training["raw_prob"]) == [0.15, 0.80]

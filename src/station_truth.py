@@ -720,6 +720,61 @@ def archive_previous_run_precipitation(
     return path
 
 
+def build_rain_training_set(
+    city: str,
+    actuals_dir: Optional[Path | str] = None,
+    precip_dir: Optional[Path | str] = None,
+) -> pd.DataFrame:
+    """Join archived precipitation forecasts with station precip actuals.
+
+    Returns a DataFrame with columns:
+      date, raw_prob, forecast_amount_in, ensemble_wet_fraction,
+      ensemble_amount_std_in, actual_precip_in, actual_wet_0_1,
+      forecast_lead_days, as_of_utc.
+    """
+    actuals_dir = Path(actuals_dir) if actuals_dir is not None else STATION_ACTUALS_DIR
+    precip_dir = Path(precip_dir) if precip_dir is not None else PRECIP_ARCHIVE_DIR
+    slug = _slugify_city(city)
+    actuals_path = actuals_dir / f"{slug}.csv"
+    precip_path = precip_dir / f"{slug}.csv"
+    empty_cols = [
+        "date", "raw_prob", "forecast_amount_in", "ensemble_wet_fraction",
+        "ensemble_amount_std_in", "actual_precip_in", "actual_wet_0_1",
+        "forecast_lead_days", "as_of_utc",
+    ]
+    if not actuals_path.exists() or not precip_path.exists():
+        return pd.DataFrame(columns=empty_cols)
+
+    actuals = pd.read_csv(actuals_path)
+    precip = pd.read_csv(precip_path)
+    if precip.empty or actuals.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    # Prefer earliest lead-1 forecast per date (mirrors temp pipeline discipline).
+    precip["date"] = pd.to_datetime(precip["date"]).dt.strftime("%Y-%m-%d")
+    precip = precip.sort_values(["date", "forecast_lead_days", "as_of_utc"])
+    precip = precip.drop_duplicates("date", keep="first")
+
+    actuals["date"] = pd.to_datetime(actuals["date"]).dt.strftime("%Y-%m-%d")
+    if "precip_in" not in actuals.columns:
+        return pd.DataFrame(columns=empty_cols)
+
+    joined = precip.merge(actuals[["date", "precip_in"]], on="date", how="inner")
+    if joined.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    joined["actual_precip_in"] = pd.to_numeric(joined["precip_in"], errors="coerce")
+    joined["actual_wet_0_1"] = (joined["actual_precip_in"] >= 0.01).astype("Int64")
+
+    return joined.rename(
+        columns={"forecast_prob_any_rain": "raw_prob"}
+    )[[
+        "date", "raw_prob", "forecast_amount_in", "ensemble_wet_fraction",
+        "ensemble_amount_std_in", "actual_precip_in", "actual_wet_0_1",
+        "forecast_lead_days", "as_of_utc",
+    ]].reset_index(drop=True)
+
+
 def build_training_set(
     city: str,
     days: int = 90,
