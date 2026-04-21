@@ -6,6 +6,7 @@
 |-----------|-----------|---------|
 | `calibration_models/` | Yes | Pickled EMOS + isotonic models (`{city}_{type}_{model}.pkl`) |
 | `forecast_archive/` | Yes | Per-city forecast history CSVs |
+| `precip_archive/` | Yes | Per-city precipitation forecast snapshots (Open-Meteo previous-runs backfill, 365d / 20 cities / 100% fill) |
 | `station_actuals/` | Yes | Per-city observed truth CSVs |
 | `paper_trades/` | Yes | Trade ledger + summary |
 | `deepseek_worker/` | Yes | Review state + decision artifacts |
@@ -19,6 +20,15 @@
 as_of_utc, date, forecast_high_f, forecast_low_f, ensemble_high_std_f,
 ensemble_low_std_f, forecast_model, forecast_lead_days, forecast_source
 ```
+
+### precip_archive/*.csv
+```
+as_of_utc, date, forecast_prob_any_rain, forecast_amount_in,
+ensemble_wet_fraction, ensemble_amount_std_in,
+forecast_model, forecast_lead_days, forecast_source
+```
+
+(`forecast_prob_any_rain` is a 0-1 fraction; `forecast_amount_in` is inches.)
 
 ### station_actuals/*.csv
 ```
@@ -45,6 +55,8 @@ Naming: `{city}_{market_type}_{model_type}.pkl`
 - model_type: `emos` (LinearRegression) or `isotonic` (IsotonicRegression)
 - Cities: 17 cities (slug form, e.g., `las_vegas`, `new_york`)
 - Market types: `high`, `low`
+
+Rain models: `{city_slug}_rain_binary_logistic.pkl` (sklearn LogisticRegression) and `{city_slug}_rain_binary_isotonic.pkl` (sklearn IsotonicRegression), trained by `train_rain_calibration.py`.
 
 ### deepseek_worker/
 - `state.json` — scan count, review runs, last review status

@@ -58,3 +58,26 @@ To enable:
    opportunities may not carry `settlement_rule` in the same format as Kalshi
 5. Recommend paper-trading Polymarket alongside Kalshi for 2+ weeks before
    giving it real weight in the policy
+
+## Rain Policy (v1, 2026-04-21)
+
+`rain_policy_v1.json` controls the rain-vertical opportunity filter. It
+declares `market_category: "rain"`, which tells the category-aware filter
+in `strategy_policy.py` to route only `market_category=rain` opportunities
+through this policy. Temperature opportunities continue to flow through
+`strategy_policy.json` (v4) unchanged.
+
+**P1 starting thresholds (NYC-only):**
+- `min_abs_edge`: 0.15 (mirrors temp v4)
+- `min_volume24hr`: 0 (NYC rain markets have blank yes_ask / zero volume;
+  gating on volume would produce zero trades)
+- `max_candidates_per_scan`: 2
+- `max_hours_to_settlement`: 48 (rain markets close at 23:59 UTC; 24h
+  horizon would cut out half the tradable window)
+- `allowed_market_types`: `["rain_binary"]`
+- `allowed_position_sides`: `["yes"]` (BUY-only, mirrors temp v4 posture)
+- `allowed_cities`: `["New York"]` (Task 6 discovery — other watchlist
+  cities have no open KXRAIN markets)
+
+Re-evaluate thresholds after 30 days of paper-trade evidence, especially
+`min_volume24hr` once NYC markets show real volume.
