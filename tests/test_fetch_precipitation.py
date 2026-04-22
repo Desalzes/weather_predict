@@ -21,6 +21,8 @@ def test_fetch_precipitation_returns_daily_probs_and_amounts():
             [{"name": "New York", "lat": 40.7, "lon": -74.0}],
             forecast_hours=72,
         )
+        # forecast_days = max(1, int(forecast_hours / 24)); 72h must map to 3d.
+        assert mock_get.call_args.kwargs["params"]["forecast_days"] == 3
 
     ny = result["New York"]
     assert ny["daily"][0]["date"] == "2026-04-21"

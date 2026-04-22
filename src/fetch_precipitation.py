@@ -60,8 +60,14 @@ def fetch_precipitation_multi(
             r = requests.get(_DETERMINISTIC_URL, params=params, timeout=20)
             r.raise_for_status()
             payload = r.json()
-        except Exception as exc:
+        except requests.exceptions.Timeout:
+            logger.warning("Precip fetch timed out for %s", name)
+            continue
+        except requests.exceptions.RequestException as exc:
             logger.warning("Precip fetch failed for %s: %s", name, exc)
+            continue
+        except ValueError as exc:  # JSON decode error
+            logger.warning("Precip fetch JSON decode error for %s: %s", name, exc)
             continue
         daily = payload.get("daily", {})
         dates = daily.get("time", []) or []
@@ -84,7 +90,8 @@ def fetch_precipitation_ensemble_multi(
 ) -> dict[str, dict]:
     """Fetch ensemble-member precipitation per location.
 
-    Returns wet-day fraction and amount std across members for each date.
+    Returns: {city_name: {"daily": [{"date", "ensemble_wet_fraction",
+        "ensemble_amount_mean_in", "ensemble_amount_std_in", "member_count"}, ...]}}
     """
     results: dict[str, dict] = {}
     for loc in locations:
@@ -103,8 +110,14 @@ def fetch_precipitation_ensemble_multi(
             r = requests.get(_ENSEMBLE_URL, params=params, timeout=30)
             r.raise_for_status()
             payload = r.json()
-        except Exception as exc:
+        except requests.exceptions.Timeout:
+            logger.warning("Ensemble precip fetch timed out for %s", name)
+            continue
+        except requests.exceptions.RequestException as exc:
             logger.warning("Ensemble precip fetch failed for %s: %s", name, exc)
+            continue
+        except ValueError as exc:  # JSON decode error
+            logger.warning("Ensemble precip fetch JSON decode error for %s: %s", name, exc)
             continue
         results[name] = _summarize_ensemble_precip(payload)
     return results
