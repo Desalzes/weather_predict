@@ -1,5 +1,7 @@
 @AGENTS.md
 
+Session management lives in docs/sessions/. Run orient at session start before any mutation.
+
 # Claude Notes
 
 Use this file only for Claude-specific deltas. Shared repository rules belong in

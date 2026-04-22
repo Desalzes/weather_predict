@@ -22,3 +22,4 @@ data/evaluation_reports/*.json
 # OS files
 .DS_Store
 Thumbs.db
+.claude/markers/
