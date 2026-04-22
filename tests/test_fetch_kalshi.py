@@ -10,6 +10,7 @@ from src.fetch_kalshi import (
     _parse_temp_ticker,
     _cache,
     _fetch_via_requests,
+    fetch_kalshi_rain_markets,
     fetch_weather_markets,
     group_markets_by_city,
 )
@@ -252,6 +253,174 @@ class GroupMarketsByCityTests(unittest.TestCase):
         grouped = group_markets_by_city(markets)
         self.assertEqual(len(grouped), 1)
         self.assertIn("Boston", grouped)
+
+
+class FetchKalshiRainMarketsTests(unittest.TestCase):
+    """Tests for the per-series KXRAIN discovery fetcher.
+
+    The existing `fetch_weather_markets` call uses `/markets/trades`, which
+    only returns recently-traded markets. KXRAIN listings rarely trade so
+    they're invisible to that pathway. `fetch_kalshi_rain_markets` must hit
+    `/markets?series_ticker=KXRAIN{CODE}&status=open` per city to pick them
+    up.
+    """
+
+    def _mock_markets_response(self, markets):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"markets": markets, "cursor": None}
+        return resp
+
+    def test_fetch_kalshi_rain_markets_hits_per_series_endpoint(self):
+        """One API call per city, each with the correct series_ticker param."""
+        resp = self._mock_markets_response([])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp) as mock_get, \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["New York", "Chicago"], limit=25)
+
+        self.assertEqual(result, [])
+        self.assertEqual(mock_get.call_count, 2)
+
+        # Verify each call hit /markets with the correct series_ticker
+        called_series = set()
+        for call in mock_get.call_args_list:
+            args, kwargs = call
+            url = args[0] if args else kwargs.get("url")
+            self.assertIn("/markets", url)
+            self.assertNotIn("/markets/trades", url)
+            params = kwargs.get("params", {})
+            self.assertEqual(params.get("status"), "open")
+            self.assertEqual(params.get("limit"), 25)
+            called_series.add(params.get("series_ticker"))
+
+        self.assertIn("KXRAINNYC", called_series)
+        self.assertIn("KXRAINCHI", called_series)
+
+    def test_fetch_kalshi_rain_markets_parses_ticker_date(self):
+        """Ticker KXRAINNYC-26APR22-T0 must resolve to city=New York, market_date=2026-04-22."""
+        sample_market = {
+            "ticker": "KXRAINNYC-26APR22-T0",
+            "title": "Will it **rain** in New York City on Tuesday?",
+            "yes_sub_title": "Rain in NYC",
+            "no_sub_title": "No Rain in NYC",
+            "close_time": "2026-04-23T03:59:00Z",
+            "yes_ask_dollars": "0.4500",
+            "yes_bid_dollars": "0.4200",
+            "volume_24h_fp": "1500",
+            "status": "open",
+        }
+        resp = self._mock_markets_response([sample_market])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp), \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["New York"])
+
+        self.assertEqual(len(result), 1)
+        m = result[0]
+        self.assertEqual(m["ticker"], "KXRAINNYC-26APR22-T0")
+        self.assertEqual(m["city"], "New York")
+        self.assertEqual(m["market_date"], "2026-04-22")
+        self.assertEqual(m["close_time"], "2026-04-23T03:59:00Z")
+        self.assertEqual(m["source"], "kalshi")
+        self.assertAlmostEqual(m["yes_ask"], 0.45)
+
+    def test_fetch_kalshi_rain_markets_handles_empty_city(self):
+        """When the API returns markets=[], return [] for that city without raising."""
+        resp = self._mock_markets_response([])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp), \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["Phoenix"])
+
+        self.assertEqual(result, [])
+
+    def test_fetch_kalshi_rain_markets_handles_http_error(self):
+        """requests.RequestException during fetch must not raise -- skip the city."""
+        import requests as req
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", side_effect=req.RequestException("boom")), \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["New York"])
+
+        self.assertEqual(result, [])
+
+    def test_fetch_kalshi_rain_markets_blank_yes_ask_preserved(self):
+        """If yes_ask is null/blank in the API payload, the returned dict must keep
+        yes_ask as None (not coerced to 0.0). The rain matcher skips these."""
+        sample_market = {
+            "ticker": "KXRAINNYC-26APR20-T0",
+            "title": "Will it **rain** in New York City on Monday?",
+            "yes_sub_title": "Rain in NYC",
+            "close_time": "2026-04-21T03:59:00Z",
+            "yes_ask_dollars": None,
+            "yes_bid_dollars": None,
+            "volume_24h_fp": "0",
+            "status": "open",
+        }
+        resp = self._mock_markets_response([sample_market])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp), \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["New York"])
+
+        self.assertEqual(len(result), 1)
+        self.assertIsNone(result[0]["yes_ask"])
+
+    def test_fetch_kalshi_rain_markets_default_cities_covers_map(self):
+        """When cities=None the function iterates over a de-duplicated view of
+        KALSHI_CITY_CODES (one call per unique city name)."""
+        resp = self._mock_markets_response([])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp) as mock_get, \
+             patch("src.fetch_kalshi.time.sleep"):
+            fetch_kalshi_rain_markets()
+
+        unique_cities = set(KALSHI_CITY_CODES.values())
+        self.assertEqual(mock_get.call_count, len(unique_cities))
+
+    def test_fetch_kalshi_rain_markets_skips_unknown_city(self):
+        """Cities not in the code map are skipped gracefully with no API call."""
+        resp = self._mock_markets_response([])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp) as mock_get, \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["Atlantis"])
+
+        self.assertEqual(result, [])
+        self.assertEqual(mock_get.call_count, 0)
+
+    def test_fetch_kalshi_rain_markets_skips_malformed_ticker(self):
+        """Markets whose ticker date portion fails to parse are dropped
+        (debug log), but other markets in the same response survive."""
+        bad_market = {
+            "ticker": "KXRAINNYC-99ZZZ00-T0",  # month 'ZZZ' is invalid
+            "close_time": "2026-04-23T03:59:00Z",
+            "yes_ask_dollars": "0.3000",
+            "status": "open",
+        }
+        good_market = {
+            "ticker": "KXRAINNYC-26APR22-T0",
+            "close_time": "2026-04-23T03:59:00Z",
+            "yes_ask_dollars": "0.5000",
+            "status": "open",
+        }
+        resp = self._mock_markets_response([bad_market, good_market])
+
+        with patch("src.fetch_kalshi._get_client", return_value=None), \
+             patch("src.fetch_kalshi.requests.get", return_value=resp), \
+             patch("src.fetch_kalshi.time.sleep"):
+            result = fetch_kalshi_rain_markets(cities=["New York"])
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["ticker"], "KXRAINNYC-26APR22-T0")
 
 
 if __name__ == "__main__":

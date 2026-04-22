@@ -67,13 +67,16 @@ Paper-only for at least 30 days. Criteria to begin real-money discussion:
 2. Paper ROI ≥ 0 net of fees
 3. Pearson correlation of daily settled-PnL series (rain vs temperature) < 0.4
 
-## Known Scanner-Side Issue
+## Market Discovery
 
-`src/fetch_kalshi.py::fetch_weather_markets` uses the `/markets/trades`
-endpoint, which only surfaces *recently-traded* markets. Untraded KXRAIN
-listings therefore slip through the default scanner's weather-prefix filter.
-For rain-vertical paper trading to fire, the scanner would need to fetch
-`/markets?series_ticker={X}` per-city — see `scripts/dump_rain_market_inventory.py`
-for the correct endpoint shape. Task 12's wiring still uses the existing
-`kalshi_markets` from the trades endpoint, so live rain-opportunity flow is
-blocked until this is fixed.
+Rain markets are discovered per-city via
+`src/fetch_kalshi.py::fetch_kalshi_rain_markets`, which queries
+`/markets?series_ticker=KXRAIN{CODE}&status=open&limit=50` for each city
+in `rain_watchlist`. This intentionally bypasses the temperature scanner's
+`/markets/trades`-based discovery because KXRAIN listings rarely trade
+(NYC's current inventory has blank `yes_ask` and zero volume) and would
+otherwise be invisible to the default scanner.
+
+`main.py` feeds this per-series market list directly into
+`match_kalshi_rain`; the trades-based `kalshi_markets` is still used by
+the temperature matcher and is untouched by the rain branch.
