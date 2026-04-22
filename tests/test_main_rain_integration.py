@@ -42,10 +42,13 @@ def test_run_scan_includes_rain_opportunities_when_enabled(tmp_path):
     }
 
     # Temperature fetchers return a minimal payload; no temp markets returned.
+    # Rain markets are now discovered via fetch_kalshi_rain_markets (per-series
+    # /markets endpoint), not the trades-based fetch_weather_markets list.
     with patch("src.fetch_forecasts.fetch_multi_location", return_value={
                  "New York": {"daily": {"time": ["2026-04-21"], "temperature_2m_max": [70], "temperature_2m_min": [50]}}
              }), \
-         patch("src.fetch_kalshi.fetch_weather_markets", return_value=[rain_market]), \
+         patch("src.fetch_kalshi.fetch_weather_markets", return_value=[]), \
+         patch("src.fetch_kalshi.fetch_kalshi_rain_markets", return_value=[rain_market]), \
          patch("src.fetch_precipitation.fetch_precipitation_multi", return_value=precip), \
          patch("src.fetch_precipitation.fetch_precipitation_ensemble_multi", return_value={}), \
          patch("src.station_truth.archive_forecast_snapshot"):

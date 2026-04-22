@@ -299,8 +299,9 @@ def run_scan(
         except Exception as exc:
             log.warning("Kalshi match failed: %s", exc)
 
-    if config.get("enable_rain_vertical", False) and kalshi_markets:
+    if config.get("enable_rain_vertical", False):
         try:
+            from src.fetch_kalshi import fetch_kalshi_rain_markets
             from src.fetch_precipitation import (
                 fetch_precipitation_multi,
                 fetch_precipitation_ensemble_multi,
@@ -311,6 +312,15 @@ def run_scan(
             rain_watchlist = config.get("rain_watchlist") or []
             rain_locations = [loc for loc in locations if loc.get("name") in rain_watchlist]
             if rain_locations:
+                # Rain markets live in KXRAIN{CODE} series and rarely show
+                # up on /markets/trades. Discover them directly per-city
+                # via /markets?series_ticker=... instead of relying on the
+                # trades-based kalshi_markets list.
+                rain_city_names = [loc.get("name") for loc in rain_locations if loc.get("name")]
+                log.info("Fetching rain markets for %d city(ies)...", len(rain_city_names))
+                rain_markets = fetch_kalshi_rain_markets(cities=rain_city_names)
+                log.info("Found %d Kalshi rain markets.", len(rain_markets))
+
                 log.info("Fetching rain forecasts for %d city(ies)...", len(rain_locations))
                 precip_forecasts = fetch_precipitation_multi(rain_locations, forecast_hours)
 
@@ -334,7 +344,7 @@ def run_scan(
                 rain_cal_mgr = RainCalibrationManager(model_dir=config.get("calibration_model_dir"))
                 rain_opps = match_kalshi_rain(
                     precip_forecasts,
-                    kalshi_markets,
+                    rain_markets,
                     calibration_manager=rain_cal_mgr,
                     hrrr_data=None,  # HRRR-precip wiring is a future task
                     hrrr_blend_horizon_hours=float(config.get("rain_hrrr_blend_horizon_hours", 12)),
