@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -173,6 +173,9 @@ def main() -> None:
             precip_prob_series = list(daily_block.get("precipitation_probability_max", []) or [])
             precip_rows_written = 0
             for idx, target_date in enumerate(daily_times):
+                # Intentional: clip precip-forecast archive to the temperature-actuals
+                # window so training joins stay aligned. Revisit when PRCP-specific
+                # actuals windows diverge from TMAX/TMIN coverage.
                 if actual_start and str(target_date) < actual_start:
                     continue
                 if actual_end and str(target_date) > actual_end:
@@ -181,17 +184,13 @@ def main() -> None:
                 precip_prob = precip_prob_series[idx] if idx < len(precip_prob_series) else None
                 if precip_sum_in is None and precip_prob is None:
                     continue
-                as_of_dt = datetime.combine(
-                    datetime.fromisoformat(str(target_date)).date() - timedelta(days=int(args.lead_days)),
-                    time(hour=12),
-                    tzinfo=timezone.utc,
-                )
+                # as_of_utc is derived inside archive_previous_run_precipitation
+                # from (date, lead_days); no need to compute it here.
                 snapshot = {
                     "date": str(target_date),
                     "precipitation_sum_in": precip_sum_in,
                     "precipitation_probability_max": precip_prob,
                     "lead_days": int(args.lead_days),
-                    "as_of_utc": as_of_dt.isoformat(),
                     "forecast_model": args.forecast_model,
                     "forecast_source": "open_meteo_previous_runs",
                 }

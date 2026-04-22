@@ -290,6 +290,7 @@ def fetch_previous_run_forecast(
         "daily": {
             "time": daily_times,
             "precipitation_sum_in": precip_in,
+            # percent 0-100; archive layer converts to fraction
             "precipitation_probability_max": precip_prob,
         },
     }

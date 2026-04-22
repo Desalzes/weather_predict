@@ -389,14 +389,20 @@ class TrainingRegressionTests(unittest.TestCase):
         city = "Boston"
         market_type = "low"
         manager = CalibrationManager(model_dir=Path.cwd())
-        manager._emos_cache[(city, market_type)] = EMOSCalibrator(
-            city=city,
-            market_type=market_type,
-            a=5.0,
-            b=1.0,
-            c=0.0,
-            training_rows=20,
-            is_fitted=True,
+        # Pre-populated cache entry uses the (mtime, model) tuple shape the
+        # manager stores on real lookups. A None mtime disables on-disk
+        # invalidation for this injected test fixture.
+        manager._emos_cache[(city, market_type)] = (
+            None,
+            EMOSCalibrator(
+                city=city,
+                market_type=market_type,
+                a=5.0,
+                b=1.0,
+                c=0.0,
+                training_rows=20,
+                is_fitted=True,
+            ),
         )
 
         opportunity = self._match_single_bucket_market(
@@ -414,14 +420,17 @@ class TrainingRegressionTests(unittest.TestCase):
         city = "Chicago"
         market_type = "low"
         manager = CalibrationManager(model_dir=Path.cwd())
-        manager._emos_cache[(city, market_type)] = EMOSCalibrator(
-            city=city,
-            market_type=market_type,
-            a=5.0,
-            b=1.0,
-            c=0.0,
-            training_rows=20,
-            is_fitted=True,
+        manager._emos_cache[(city, market_type)] = (
+            None,
+            EMOSCalibrator(
+                city=city,
+                market_type=market_type,
+                a=5.0,
+                b=1.0,
+                c=0.0,
+                training_rows=20,
+                is_fitted=True,
+            ),
         )
 
         opportunity = self._match_single_bucket_market(
@@ -439,21 +448,27 @@ class TrainingRegressionTests(unittest.TestCase):
         city = "Boston"
         market_type = "low"
         manager = CalibrationManager(model_dir=Path.cwd())
-        manager._emos_cache[(city, market_type)] = EMOSCalibrator(
-            city=city,
-            market_type=market_type,
-            a=5.0,
-            b=1.0,
-            c=0.0,
-            training_rows=20,
-            is_fitted=True,
+        manager._emos_cache[(city, market_type)] = (
+            None,
+            EMOSCalibrator(
+                city=city,
+                market_type=market_type,
+                a=5.0,
+                b=1.0,
+                c=0.0,
+                training_rows=20,
+                is_fitted=True,
+            ),
         )
-        manager._isotonic_cache[(city, market_type)] = IsotonicCalibrator(
-            city=city,
-            market_type=market_type,
-        ).fit(
-            [0.05, 0.10, 0.15, 0.20, 0.25, 0.75, 0.80, 0.85, 0.90, 0.95],
-            [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        manager._isotonic_cache[(city, market_type)] = (
+            None,
+            IsotonicCalibrator(
+                city=city,
+                market_type=market_type,
+            ).fit(
+                [0.05, 0.10, 0.15, 0.20, 0.25, 0.75, 0.80, 0.85, 0.90, 0.95],
+                [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+            ),
         )
 
         opportunity = self._match_single_bucket_market(
@@ -760,6 +775,37 @@ def test_archive_previous_run_precipitation_writes_expected_row(tmp_path):
     assert df.iloc[0]["forecast_prob_any_rain"] == pytest.approx(0.78, rel=1e-3)
     assert df.iloc[0]["forecast_lead_days"] == 1
     assert df.iloc[0]["forecast_source"] == "open_meteo_previous_runs"
+
+
+def test_archive_previous_run_precipitation_derives_as_of_utc_when_omitted(tmp_path):
+    """Caller may omit ``as_of_utc``; helper derives it from date + lead_days.
+
+    Prevents future callers (e.g., live-scan path) from silently producing
+    rows with wrong as-of semantics that collide on the (as_of_utc, date)
+    dedup key when the CLI-side derivation is forgotten.
+    """
+    from src import station_truth
+
+    precip_dir = tmp_path / "precip_archive"
+    snapshot = {
+        "date": "2025-04-01",
+        "precipitation_sum_in": 0.12,
+        "precipitation_probability_max": 78,
+        "lead_days": 1,
+        # deliberately no "as_of_utc"
+        "forecast_source": "open_meteo_previous_runs",
+    }
+
+    station_truth.archive_previous_run_precipitation(
+        city="New York",
+        snapshot=snapshot,
+        base_dir=precip_dir,
+    )
+
+    df = pd.read_csv(precip_dir / "new_york.csv")
+    assert df.iloc[0]["as_of_utc"] == "2025-03-31T12:00:00+00:00"
+    assert df.iloc[0]["date"] == "2025-04-01"
+    assert df.iloc[0]["forecast_lead_days"] == 1
 
 
 if __name__ == "__main__":

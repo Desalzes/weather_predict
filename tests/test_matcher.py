@@ -1,5 +1,7 @@
 """Tests for matcher module."""
 
+from datetime import datetime, timezone
+
 import pytest
 from src.matcher import match_kalshi_markets
 
@@ -49,6 +51,7 @@ def test_matcher_uses_ngr_when_flag_enabled(monkeypatch):
         uncertainty_std_f=2.0,
         calibration_manager=stub,
         use_ngr_calibration=True,
+        now_utc=datetime(2026, 4, 17, 0, 0, tzinfo=timezone.utc),
     )
 
     assert len(stub.calls) == 1

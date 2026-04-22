@@ -122,24 +122,38 @@ class RainCalibrationManager:
 
     def __init__(self, model_dir=None):
         self._model_dir = Path(model_dir) if model_dir else CALIBRATION_MODELS_DIR
-        self._logistic_cache: dict = {}
-        self._isotonic_cache: dict = {}
+        # Each cache entry is (mtime_or_None, model_or_None). The mtime lets
+        # us detect pkl files rewritten by autopilot_weekly or freshly-appeared
+        # models after a cold start that cached None.
+        self._logistic_cache: dict[str, tuple[Optional[float], Optional[LogisticRainCalibrator]]] = {}
+        self._isotonic_cache: dict[str, tuple[Optional[float], Optional[IsotonicRainCalibrator]]] = {}
+
+    @staticmethod
+    def _path_mtime(path: Path) -> Optional[float]:
+        try:
+            return path.stat().st_mtime if path.exists() else None
+        except OSError:
+            return None
 
     def _logistic(self, city: str) -> Optional[LogisticRainCalibrator]:
-        if city not in self._logistic_cache:
-            path = _rain_model_path(city, "logistic", self._model_dir)
-            self._logistic_cache[city] = (
-                LogisticRainCalibrator.load(path) if path.exists() else None
-            )
-        return self._logistic_cache[city]
+        path = _rain_model_path(city, "logistic", self._model_dir)
+        current_mtime = self._path_mtime(path)
+        cached = self._logistic_cache.get(city)
+        if cached is not None and cached[0] == current_mtime:
+            return cached[1]
+        model = LogisticRainCalibrator.load(path) if current_mtime is not None else None
+        self._logistic_cache[city] = (current_mtime, model)
+        return model
 
     def _isotonic(self, city: str) -> Optional[IsotonicRainCalibrator]:
-        if city not in self._isotonic_cache:
-            path = _rain_model_path(city, "isotonic", self._model_dir)
-            self._isotonic_cache[city] = (
-                IsotonicRainCalibrator.load(path) if path.exists() else None
-            )
-        return self._isotonic_cache[city]
+        path = _rain_model_path(city, "isotonic", self._model_dir)
+        current_mtime = self._path_mtime(path)
+        cached = self._isotonic_cache.get(city)
+        if cached is not None and cached[0] == current_mtime:
+            return cached[1]
+        model = IsotonicRainCalibrator.load(path) if current_mtime is not None else None
+        self._isotonic_cache[city] = (current_mtime, model)
+        return model
 
     def calibrate_rain_probability(
         self, city: str, raw_prob: float

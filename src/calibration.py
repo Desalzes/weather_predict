@@ -385,17 +385,30 @@ class CalibrationManager:
     def __init__(self, model_dir: Optional[Path | str] = None):
         self.model_dir = Path(model_dir) if model_dir is not None else CALIBRATION_MODELS_DIR
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        self._emos_cache: dict[tuple[str, str], Optional[EMOSCalibrator]] = {}
-        self._isotonic_cache: dict[tuple[str, str], Optional[IsotonicCalibrator]] = {}
+        # Each cache entry is (mtime_or_None, model_or_None). mtime invalidation
+        # catches retrained pkls (autopilot_weekly rewrites models in place) and
+        # newly-appeared pkls after a cold start that cached None.
+        self._emos_cache: dict[tuple[str, str], tuple[Optional[float], Optional[EMOSCalibrator]]] = {}
+        self._isotonic_cache: dict[tuple[str, str], tuple[Optional[float], Optional[IsotonicCalibrator]]] = {}
+        self._ngr_cache: dict[tuple[str, str], tuple[Optional[float], Optional[NGRCalibrator]]] = {}
+
+    @staticmethod
+    def _path_mtime(path: Path) -> Optional[float]:
+        try:
+            return path.stat().st_mtime if path.exists() else None
+        except OSError:
+            return None
 
     def _load_emos(self, city: str, market_type: str) -> Optional[EMOSCalibrator]:
         key = (city, market_type)
-        if key in self._emos_cache:
-            return self._emos_cache[key]
-
         path = calibration_model_path(city, market_type, "emos", model_dir=self.model_dir)
-        if not path.exists():
-            self._emos_cache[key] = None
+        current_mtime = self._path_mtime(path)
+        cached = self._emos_cache.get(key)
+        if cached is not None and cached[0] == current_mtime:
+            return cached[1]
+
+        if current_mtime is None:
+            self._emos_cache[key] = (None, None)
             return None
 
         try:
@@ -404,17 +417,19 @@ class CalibrationManager:
             logger.warning("Failed loading EMOS model %s: %s", path, exc)
             model = None
 
-        self._emos_cache[key] = model
+        self._emos_cache[key] = (current_mtime, model)
         return model
 
     def _load_isotonic(self, city: str, market_type: str) -> Optional[IsotonicCalibrator]:
         key = (city, market_type)
-        if key in self._isotonic_cache:
-            return self._isotonic_cache[key]
-
         path = calibration_model_path(city, market_type, "isotonic", model_dir=self.model_dir)
-        if not path.exists():
-            self._isotonic_cache[key] = None
+        current_mtime = self._path_mtime(path)
+        cached = self._isotonic_cache.get(key)
+        if cached is not None and cached[0] == current_mtime:
+            return cached[1]
+
+        if current_mtime is None:
+            self._isotonic_cache[key] = (None, None)
             return None
 
         try:
@@ -423,19 +438,19 @@ class CalibrationManager:
             logger.warning("Failed loading isotonic model %s: %s", path, exc)
             model = None
 
-        self._isotonic_cache[key] = model
+        self._isotonic_cache[key] = (current_mtime, model)
         return model
 
     def _load_ngr(self, city: str, market_type: str) -> Optional[NGRCalibrator]:
         key = (city, market_type)
-        if not hasattr(self, "_ngr_cache"):
-            self._ngr_cache = {}
-        if key in self._ngr_cache:
-            return self._ngr_cache[key]
-
         path = calibration_model_path(city, market_type, "ngr", model_dir=self.model_dir)
-        if not path.exists():
-            self._ngr_cache[key] = None
+        current_mtime = self._path_mtime(path)
+        cached = self._ngr_cache.get(key)
+        if cached is not None and cached[0] == current_mtime:
+            return cached[1]
+
+        if current_mtime is None:
+            self._ngr_cache[key] = (None, None)
             return None
 
         try:
@@ -444,7 +459,7 @@ class CalibrationManager:
             logger.warning("Failed loading NGR model %s: %s", path, exc)
             model = None
 
-        self._ngr_cache[key] = model
+        self._ngr_cache[key] = (current_mtime, model)
         return model
 
     def predict_distribution(
