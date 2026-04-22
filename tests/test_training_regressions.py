@@ -389,14 +389,20 @@ class TrainingRegressionTests(unittest.TestCase):
         city = "Boston"
         market_type = "low"
         manager = CalibrationManager(model_dir=Path.cwd())
-        manager._emos_cache[(city, market_type)] = EMOSCalibrator(
-            city=city,
-            market_type=market_type,
-            a=5.0,
-            b=1.0,
-            c=0.0,
-            training_rows=20,
-            is_fitted=True,
+        # Pre-populated cache entry uses the (mtime, model) tuple shape the
+        # manager stores on real lookups. A None mtime disables on-disk
+        # invalidation for this injected test fixture.
+        manager._emos_cache[(city, market_type)] = (
+            None,
+            EMOSCalibrator(
+                city=city,
+                market_type=market_type,
+                a=5.0,
+                b=1.0,
+                c=0.0,
+                training_rows=20,
+                is_fitted=True,
+            ),
         )
 
         opportunity = self._match_single_bucket_market(
@@ -414,14 +420,17 @@ class TrainingRegressionTests(unittest.TestCase):
         city = "Chicago"
         market_type = "low"
         manager = CalibrationManager(model_dir=Path.cwd())
-        manager._emos_cache[(city, market_type)] = EMOSCalibrator(
-            city=city,
-            market_type=market_type,
-            a=5.0,
-            b=1.0,
-            c=0.0,
-            training_rows=20,
-            is_fitted=True,
+        manager._emos_cache[(city, market_type)] = (
+            None,
+            EMOSCalibrator(
+                city=city,
+                market_type=market_type,
+                a=5.0,
+                b=1.0,
+                c=0.0,
+                training_rows=20,
+                is_fitted=True,
+            ),
         )
 
         opportunity = self._match_single_bucket_market(
@@ -439,21 +448,27 @@ class TrainingRegressionTests(unittest.TestCase):
         city = "Boston"
         market_type = "low"
         manager = CalibrationManager(model_dir=Path.cwd())
-        manager._emos_cache[(city, market_type)] = EMOSCalibrator(
-            city=city,
-            market_type=market_type,
-            a=5.0,
-            b=1.0,
-            c=0.0,
-            training_rows=20,
-            is_fitted=True,
+        manager._emos_cache[(city, market_type)] = (
+            None,
+            EMOSCalibrator(
+                city=city,
+                market_type=market_type,
+                a=5.0,
+                b=1.0,
+                c=0.0,
+                training_rows=20,
+                is_fitted=True,
+            ),
         )
-        manager._isotonic_cache[(city, market_type)] = IsotonicCalibrator(
-            city=city,
-            market_type=market_type,
-        ).fit(
-            [0.05, 0.10, 0.15, 0.20, 0.25, 0.75, 0.80, 0.85, 0.90, 0.95],
-            [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        manager._isotonic_cache[(city, market_type)] = (
+            None,
+            IsotonicCalibrator(
+                city=city,
+                market_type=market_type,
+            ).fit(
+                [0.05, 0.10, 0.15, 0.20, 0.25, 0.75, 0.80, 0.85, 0.90, 0.95],
+                [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+            ),
         )
 
         opportunity = self._match_single_bucket_market(

@@ -196,3 +196,63 @@ def test_build_rain_training_set_joins_forecasts_and_actuals(tmp_path):
     assert list(training["date"]) == ["2026-04-01", "2026-04-02"]
     assert list(training["actual_wet_0_1"]) == [0, 1]
     assert list(training["raw_prob"]) == [0.15, 0.80]
+
+
+def test_rain_calibration_manager_picks_up_retrained_model(tmp_path):
+    """Manager must reload a model whose pkl file was rewritten after the
+    cache entry was created. Simulates the weekly retrain scenario."""
+    import os
+    import time
+    import numpy as np
+    from src.rain_calibration import LogisticRainCalibrator, RainCalibrationManager
+
+    rng = np.random.default_rng(20)
+    path = tmp_path / "new_york_rain_binary_logistic.pkl"
+
+    # Version 1: clearly-biased model (should predict ~0.2 for any input)
+    v1 = LogisticRainCalibrator(city="New York")
+    biased_probs = np.concatenate([rng.uniform(0.05, 0.15, 200), rng.uniform(0.75, 0.95, 20)])
+    biased_outcomes = np.concatenate([np.zeros(200, dtype=int), np.ones(20, dtype=int)])
+    v1.fit(biased_probs, biased_outcomes)
+    v1.save(path)
+    mgr = RainCalibrationManager(model_dir=tmp_path)
+    first = mgr.calibrate_rain_probability(city="New York", raw_prob=0.5)
+    assert first is not None
+
+    # Version 2: opposite bias
+    time.sleep(0.01)  # ensure different mtime on filesystems with coarse granularity
+    future_time = os.path.getmtime(path) + 10
+    v2 = LogisticRainCalibrator(city="New York")
+    opposite_probs = np.concatenate([rng.uniform(0.05, 0.15, 20), rng.uniform(0.75, 0.95, 200)])
+    opposite_outcomes = np.concatenate([np.zeros(20, dtype=int), np.ones(200, dtype=int)])
+    v2.fit(opposite_probs, opposite_outcomes)
+    v2.save(path)
+    os.utime(path, (future_time, future_time))
+
+    second = mgr.calibrate_rain_probability(city="New York", raw_prob=0.5)
+    assert second is not None
+    # The two versions should produce detectably different probabilities
+    assert abs(first["calibrated_prob"] - second["calibrated_prob"]) > 0.05
+
+
+def test_rain_calibration_manager_picks_up_newly_appeared_model(tmp_path):
+    """When no model exists at startup, the manager caches None. When a model
+    later appears on disk, the manager must pick it up on the next call."""
+    import numpy as np
+    from src.rain_calibration import LogisticRainCalibrator, RainCalibrationManager
+
+    mgr = RainCalibrationManager(model_dir=tmp_path)
+    assert mgr.calibrate_rain_probability(city="New York", raw_prob=0.5) is None
+
+    # Write a model after the initial None-cache
+    rng = np.random.default_rng(30)
+    probs = rng.uniform(0.05, 0.95, 150)
+    outcomes = (rng.uniform(0, 1, 150) < probs).astype(int)
+    cal = LogisticRainCalibrator(city="New York")
+    cal.fit(probs, outcomes)
+    cal.save(tmp_path / "new_york_rain_binary_logistic.pkl")
+
+    # Next call must pick it up
+    result = mgr.calibrate_rain_probability(city="New York", raw_prob=0.5)
+    assert result is not None
+    assert result["forecast_calibration_source"] == "logistic"

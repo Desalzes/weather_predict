@@ -1,11 +1,19 @@
 """Tests for calibration module."""
 
+import os
+import time
+
 import numpy as np
 import pandas as pd
 import pytest
 from pathlib import Path
 
-from src.calibration import train_city_models, CalibrationManager
+from src.calibration import (
+    CalibrationManager,
+    EMOSCalibrator,
+    calibration_model_path,
+    train_city_models,
+)
 
 
 def test_train_city_models_fits_ngr_when_enough_rows(tmp_path):
@@ -95,3 +103,76 @@ def test_calibration_manager_predict_distribution_respects_selective_fallback(tm
     assert source == "raw_selective_fallback"
     assert mu == 40.0  # unchanged
     assert sigma >= 0.25  # sigma still produced (so matcher has something to work with)
+
+
+def test_calibration_manager_picks_up_retrained_emos_model(tmp_path):
+    """Manager must reload an EMOS model whose pkl file was rewritten after
+    the cache entry was created. Simulates the weekly retrain scenario where
+    a long-running run_loop would otherwise serve a stale model forever."""
+    city = "Austin"
+    market_type = "high"
+    path = calibration_model_path(city, market_type, "emos", model_dir=tmp_path)
+
+    # Version 1: adds +1°F bias.
+    v1 = EMOSCalibrator(
+        city=city, market_type=market_type,
+        a=1.0, b=1.0, c=0.0,
+        training_rows=20, is_fitted=True,
+    )
+    v1.save(path)
+
+    manager = CalibrationManager(model_dir=tmp_path)
+    first, _ = manager.correct_forecast(
+        city=city, market_type=market_type,
+        forecast_f=80.0, spread_f=1.5,
+    )
+    assert first == pytest.approx(81.0)
+
+    # Version 2: adds +5°F bias; overwrite the same path and bump mtime.
+    time.sleep(0.01)
+    future_time = os.path.getmtime(path) + 10
+    v2 = EMOSCalibrator(
+        city=city, market_type=market_type,
+        a=5.0, b=1.0, c=0.0,
+        training_rows=20, is_fitted=True,
+    )
+    v2.save(path)
+    os.utime(path, (future_time, future_time))
+
+    second, _ = manager.correct_forecast(
+        city=city, market_type=market_type,
+        forecast_f=80.0, spread_f=1.5,
+    )
+    assert second == pytest.approx(85.0)
+
+
+def test_calibration_manager_picks_up_newly_appeared_emos_model(tmp_path):
+    """When no EMOS model exists at startup, the manager caches None. When a
+    model later appears on disk, the manager must pick it up on the next
+    call rather than continuing to serve the cached None."""
+    city = "Austin"
+    market_type = "high"
+
+    manager = CalibrationManager(model_dir=tmp_path)
+    # First call: no model -> falls back to raw.
+    forecast_before, source_before = manager.correct_forecast(
+        city=city, market_type=market_type,
+        forecast_f=80.0, spread_f=1.5,
+    )
+    assert source_before == "raw"
+    assert forecast_before == pytest.approx(80.0)
+
+    # Now write a model and expect the next call to pick it up.
+    path = calibration_model_path(city, market_type, "emos", model_dir=tmp_path)
+    EMOSCalibrator(
+        city=city, market_type=market_type,
+        a=3.0, b=1.0, c=0.0,
+        training_rows=20, is_fitted=True,
+    ).save(path)
+
+    forecast_after, source_after = manager.correct_forecast(
+        city=city, market_type=market_type,
+        forecast_f=80.0, spread_f=1.5,
+    )
+    assert source_after == "emos"
+    assert forecast_after == pytest.approx(83.0)
