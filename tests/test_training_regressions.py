@@ -762,5 +762,36 @@ def test_archive_previous_run_precipitation_writes_expected_row(tmp_path):
     assert df.iloc[0]["forecast_source"] == "open_meteo_previous_runs"
 
 
+def test_archive_previous_run_precipitation_derives_as_of_utc_when_omitted(tmp_path):
+    """Caller may omit ``as_of_utc``; helper derives it from date + lead_days.
+
+    Prevents future callers (e.g., live-scan path) from silently producing
+    rows with wrong as-of semantics that collide on the (as_of_utc, date)
+    dedup key when the CLI-side derivation is forgotten.
+    """
+    from src import station_truth
+
+    precip_dir = tmp_path / "precip_archive"
+    snapshot = {
+        "date": "2025-04-01",
+        "precipitation_sum_in": 0.12,
+        "precipitation_probability_max": 78,
+        "lead_days": 1,
+        # deliberately no "as_of_utc"
+        "forecast_source": "open_meteo_previous_runs",
+    }
+
+    station_truth.archive_previous_run_precipitation(
+        city="New York",
+        snapshot=snapshot,
+        base_dir=precip_dir,
+    )
+
+    df = pd.read_csv(precip_dir / "new_york.csv")
+    assert df.iloc[0]["as_of_utc"] == "2025-03-31T12:00:00+00:00"
+    assert df.iloc[0]["date"] == "2025-04-01"
+    assert df.iloc[0]["forecast_lead_days"] == 1
+
+
 if __name__ == "__main__":
     unittest.main()

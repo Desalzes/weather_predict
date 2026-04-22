@@ -675,7 +675,7 @@ def archive_previous_run_precipitation(
     - ``precipitation_sum_in`` (inches, may be None)
     - ``precipitation_probability_max`` (percent 0-100, may be None)
     - ``lead_days`` (optional, int)
-    - ``as_of_utc`` (optional, ISO-8601 string)
+    - ``as_of_utc`` (optional, ISO-8601 string; derived from date/lead_days when absent)
     - ``forecast_source`` (optional; defaults to "open_meteo_previous_runs")
     - ``forecast_model`` (optional; defaults to "best_match")
     """
@@ -695,8 +695,28 @@ def archive_previous_run_precipitation(
     except (TypeError, ValueError):
         amount_value = None
 
+    # Derive as_of_utc from date + lead_days when callers don't supply it, so
+    # every archived row lands on the same canonical (as_of_utc, date) dedup
+    # key regardless of which code path produced the snapshot. Mirrors the
+    # derivation inside ``archive_previous_run_forecast``.
+    as_of_utc = snapshot.get("as_of_utc")
+    if as_of_utc is None:
+        target_date = snapshot.get("date")
+        lead_days_raw = snapshot.get("lead_days")
+        if target_date is not None and lead_days_raw is not None:
+            try:
+                as_of_dt = datetime.combine(
+                    datetime.fromisoformat(str(target_date)).date()
+                    - timedelta(days=int(lead_days_raw)),
+                    time(hour=12),
+                    tzinfo=timezone.utc,
+                )
+                as_of_utc = as_of_dt.isoformat()
+            except (TypeError, ValueError):
+                as_of_utc = None
+
     row = {
-        "as_of_utc": snapshot.get("as_of_utc"),
+        "as_of_utc": as_of_utc,
         "date": snapshot.get("date"),
         "forecast_prob_any_rain": prob_fraction,
         "forecast_amount_in": amount_value,
