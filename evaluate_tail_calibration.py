@@ -39,6 +39,13 @@ _DEFAULT_LOW_THRESHOLDS = [20.0, 30.0, 40.0, 50.0]
 _TAIL_LO = 0.25
 _TAIL_HI = 0.75
 
+# Minimum log-loss improvement over isotonic/climatology to qualify for
+# unblock. Prevents noise qualifications where the tail calibrator's
+# logistic stage degenerates to approximate identity — seen in the first
+# scorecard where ~60% of "qualifying" pairs had dIso < 1e-4 nats.
+# Threshold chosen at 1e-3 nats (~0.1% relative log-loss improvement).
+_MIN_IMPROVEMENT_NATS = 1e-3
+
 
 def _log_loss(probs: np.ndarray, outcomes: np.ndarray) -> float:
     probs = np.clip(probs, 1e-6, 1 - 1e-6)
@@ -99,7 +106,10 @@ def evaluate_threshold_pair(
     ll_tail = _log_loss(tail_preds[tail_idx], y[tail_idx])
     ll_clim = _log_loss(climatology[tail_idx], y[tail_idx])
 
-    qualifies = ll_tail < ll_clim and ll_tail < ll_iso
+    qualifies = (
+        ll_tail < ll_clim - _MIN_IMPROVEMENT_NATS
+        and ll_tail < ll_iso - _MIN_IMPROVEMENT_NATS
+    )
     return {
         "city": city, "market_type": market_type, "direction": direction,
         "threshold": threshold, "status": "ok",
@@ -150,7 +160,10 @@ def evaluate_bucket_pair(
     ll_bucket = _log_loss(bucket_preds, y)
     ll_clim = _log_loss(climatology, y)
 
-    qualifies = ll_bucket < ll_clim and ll_bucket < ll_iso
+    qualifies = (
+        ll_bucket < ll_clim - _MIN_IMPROVEMENT_NATS
+        and ll_bucket < ll_iso - _MIN_IMPROVEMENT_NATS
+    )
     return {
         "city": city, "market_type": market_type,
         "bucket_low": bucket_low, "bucket_high": bucket_high,
