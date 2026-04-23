@@ -191,6 +191,19 @@ def run_scan(
             log.warning("Calibration setup failed; using raw forecasts/probabilities: %s", exc)
             calibration_manager = None
 
+    tail_calibration_manager = None
+    if config.get("enable_tail_calibration", False):
+        try:
+            from src.tail_calibration import TailCalibrationManager
+
+            tail_calibration_manager = TailCalibrationManager(
+                model_dir=config.get("calibration_model_dir"),
+            )
+            log.info("Tail calibration enabled.")
+        except Exception as exc:
+            log.warning("Tail calibration setup failed; falling back to raw: %s", exc)
+            tail_calibration_manager = None
+
     all_opportunities = []
     kalshi_markets = []
     poly_markets = []
@@ -289,6 +302,7 @@ def run_scan(
                 uncertainty_std_f=uncertainty,
                 ensemble_data=ensemble_data,
                 calibration_manager=calibration_manager,
+                tail_calibration_manager=tail_calibration_manager,
                 hrrr_data=kalshi_hrrr_data,
                 hrrr_blend_horizon_hours=hrrr_blend_horizon_hours,
                 now_utc=now_utc,
@@ -399,9 +413,40 @@ def run_scan(
     print("\n" + report)
 
     # Always apply strategy policy filter to narrow trade candidates
-    from src.strategy_policy import filter_opportunities_for_policy, load_strategy_policy
+    from src.strategy_policy import (
+        apply_tail_unblocks,
+        filter_opportunities_for_policy,
+        load_strategy_policy,
+    )
 
     strategy_policy, strategy_policy_path = load_strategy_policy(config.get("strategy_policy_path"))
+
+    def _tail_preroute(opps: list[dict], policy: dict) -> list[dict]:
+        """Route SELL / bucket temperature opportunities through
+        apply_tail_unblocks. BUY threshold opportunities pass through
+        unchanged. Rain (and any non-temperature) opportunities bypass the
+        tail filter so their own policy can handle them.
+        """
+        result = []
+        for o in opps:
+            # Only temperature opportunities go through the tail filter.
+            # Rain opportunities are routed via the rain policy separately.
+            if str(o.get("market_category") or "temperature") != "temperature":
+                result.append(o)
+                continue
+            td = None
+            if not o.get("is_bucket", False):
+                rule = str(o.get("settlement_rule", "")).strip().lower()
+                if rule in ("gt", "gte"):
+                    td = "above"
+                elif rule in ("lt", "lte"):
+                    td = "below"
+            routed = apply_tail_unblocks(o, policy, threshold_direction=td)
+            if routed is not None:
+                result.append(routed)
+        return result
+
+    all_opportunities = _tail_preroute(all_opportunities, strategy_policy)
     trade_opportunities = filter_opportunities_for_policy(all_opportunities, strategy_policy)
     log.info(
         "Strategy policy candidates: %d/%d from %s.",
