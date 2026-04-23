@@ -81,3 +81,20 @@ through this policy. Temperature opportunities continue to flow through
 
 Re-evaluate thresholds after 30 days of paper-trade evidence, especially
 `min_volume24hr` once NYC markets show real volume.
+
+## Tail-Unblocks Policy (v5, 2026-04-23)
+
+P2 policy v5 adds two top-level sections:
+
+- `tail_unblocks` — per-pair allowlist overrides for SELL-side and bucket
+  markets that are blanket-blocked by `allowed_position_sides` and
+  `allowed_settlement_rules`. Entries carry `scorecard_ref` and
+  `bankroll_slice` for attribution. Empty at launch; populated manually
+  from weekly scorecards that pass the evaluation gate.
+- `bankroll_slices` — fractions summing to 1.0:
+  - `temperature_buy`: 0.70 (existing BUY book)
+  - `rain_binary`: 0.20 (P1 rain vertical)
+  - `probation`: 0.10 (new tail unblocks, 30-day evaluation)
+
+See `.claude/rules/tail-calibration.md` for the unblock workflow and
+calibration chain details.
