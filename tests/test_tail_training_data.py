@@ -145,3 +145,62 @@ def test_raw_prob_below_matches_matcher_kalshi_threshold_convention():
         training = _raw_prob_below(forecast, threshold, sigma)
         serving = _kalshi_threshold_yes_probability("below", threshold, forecast, sigma)
         assert abs(training - serving) < 1e-9
+
+
+def test_raw_prob_above_matches_matcher_after_sigma_clip(tmp_path):
+    """The training builder must clip sigma to [1.0, 6.0] before the CDF,
+    matching src/matcher.py._ensemble_sigma_for_date semantics. Otherwise
+    the calibrator trains on a probability distribution that the live
+    matcher never produces."""
+    from src.tail_training_data import build_tail_training_set
+    from src.matcher import _kalshi_threshold_yes_probability
+
+    actuals_dir = tmp_path / "station_actuals"
+    archive_dir = tmp_path / "forecast_archive"
+    actuals_dir.mkdir()
+    archive_dir.mkdir()
+
+    dates = ["2030-01-01", "2030-01-02", "2030-01-03"]
+    _write_actuals(actuals_dir / "new_york.csv", dates, [70.0, 75.0, 80.0])
+    _write_archive(
+        archive_dir / "new_york.csv",
+        dates,
+        forecast_high_f=[70.0, 70.0, 70.0],
+        ensemble_high_std_f=[0.3, 3.0, 9.0],  # below, within, above clip
+    )
+
+    df = build_tail_training_set(
+        city="New York",
+        market_type="high",
+        direction="above",
+        threshold=75.0,
+        actuals_dir=actuals_dir,
+        archive_dir=archive_dir,
+    )
+
+    # Training raw_prob must equal serving probability with clipped sigma.
+    for i, raw_sigma in enumerate([0.3, 3.0, 9.0]):
+        clipped_sigma = max(1.0, min(6.0, raw_sigma))
+        expected = _kalshi_threshold_yes_probability(
+            "above", 75.0, 70.0, clipped_sigma,
+        )
+        assert df.iloc[i]["raw_prob"] == pytest.approx(expected, abs=1e-9), (
+            f"sigma_raw={raw_sigma} clipped to {clipped_sigma}: "
+            f"training={df.iloc[i]['raw_prob']}, serving_expected={expected}"
+        )
+    # Also assert the sigma_f column reflects the clip (not the raw archive value).
+    assert list(df["sigma_f"]) == [1.0, 3.0, 6.0]
+
+
+def test_build_bucket_training_set_rejects_inverted_bounds(tmp_path):
+    from src.tail_training_data import build_bucket_training_set
+
+    with pytest.raises(ValueError, match="bucket_low"):
+        build_bucket_training_set(
+            city="New York",
+            market_type="high",
+            bucket_low=71.0,
+            bucket_high=70.0,
+            actuals_dir=tmp_path / "a",
+            archive_dir=tmp_path / "b",
+        )

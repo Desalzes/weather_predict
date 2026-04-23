@@ -20,12 +20,16 @@ training pipeline in `src/station_truth.py::build_training_set`.
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
+from src.matcher import (
+    _ENSEMBLE_SIGMA_CAP_F,
+    _ENSEMBLE_SIGMA_FLOOR_F,
+    _normal_cdf,
+)
 from src.station_truth import (
     FORECAST_ARCHIVE_DIR,
     STATION_ACTUALS_DIR,
@@ -51,13 +55,6 @@ _BUCKET_EMPTY_COLUMNS = [
     "forecast_lead_days",
     "as_of_utc",
 ]
-
-
-def _normal_cdf(x: float, mu: float = 0.0, sigma: float = 1.0) -> float:
-    """Standard normal CDF using math.erfc — matches `src/matcher.py`."""
-    sigma = max(float(sigma), 1e-6)
-    z = (x - mu) / sigma
-    return 0.5 * math.erfc(-z / math.sqrt(2))
 
 
 def _threshold_exceeded(actual_value: float, threshold: float, direction: str) -> int:
@@ -168,6 +165,16 @@ def _load_and_join(
     if merged.empty:
         return None
 
+    # Clip ensemble sigma to the same bounds the live matcher applies in
+    # `_ensemble_sigma_for_date` (src/matcher.py). Without this, training
+    # rows with raw sigma outside [floor, cap] would produce raw_prob values
+    # the serving path never emits, creating train/serve skew that silently
+    # corrupts the calibrator.
+    merged["sigma_f"] = merged["sigma_f"].clip(
+        lower=_ENSEMBLE_SIGMA_FLOOR_F,
+        upper=_ENSEMBLE_SIGMA_CAP_F,
+    )
+
     return merged.reset_index(drop=True)
 
 
@@ -253,6 +260,11 @@ def build_bucket_training_set(
     pd.DataFrame with columns `_BUCKET_EMPTY_COLUMNS` in that order. Empty if
     either source file is missing/empty or the directories do not exist at all.
     """
+    if float(bucket_low) > float(bucket_high):
+        raise ValueError(
+            f"bucket_low ({bucket_low}) must be <= bucket_high ({bucket_high})"
+        )
+
     merged = _load_and_join(city, market_type, actuals_dir, archive_dir)
     if merged is None:
         return pd.DataFrame(columns=_BUCKET_EMPTY_COLUMNS)
