@@ -99,12 +99,23 @@ def _load_and_join(
     market_type: str,
     actuals_dir: Optional[Path | str],
     archive_dir: Optional[Path | str],
+    uncertainty_std_f: float = 2.0,
 ) -> Optional[pd.DataFrame]:
     """Shared join logic. Returns None if no valid joined rows exist.
 
     On success the returned frame has columns:
       date (YYYY-MM-DD str), forecast_value_f, sigma_f, actual_value_f,
       forecast_lead_days, as_of_utc.
+
+    Parameters
+    ----------
+    uncertainty_std_f : float, default 2.0
+        Fallback sigma when the archive has NaN ensemble sigma. Matches the
+        matcher's serving default at `src/matcher.py::match_kalshi_markets`.
+        Must match the live-matcher path otherwise training sees only the
+        ~23 percent of archive rows with live-scan ensemble sigma filled in,
+        producing a recency-biased sample the calibrator never encounters at
+        serve time.
     """
     actuals_dir_path = Path(actuals_dir) if actuals_dir is not None else STATION_ACTUALS_DIR
     archive_dir_path = Path(archive_dir) if archive_dir is not None else FORECAST_ARCHIVE_DIR
@@ -161,6 +172,14 @@ def _load_and_join(
     merged["sigma_f"] = pd.to_numeric(merged["sigma_f"], errors="coerce")
     merged["actual_value_f"] = pd.to_numeric(merged["actual_value_f"], errors="coerce")
 
+    # Fill NaN sigma with the matcher's serving fallback BEFORE dropping NaN on
+    # other columns. The live matcher in `src/matcher.py::_resolve_temperature_uncertainty`
+    # returns `uncertainty_std_f` (config default 2.0) when the ensemble fetch
+    # yields None; if training dropped those rows instead, the calibrator would
+    # see only the subset of archive dates with populated ensemble sigma (~23%
+    # of the archive, systematically biased toward recent live-scan days).
+    merged["sigma_f"] = merged["sigma_f"].fillna(float(uncertainty_std_f))
+
     merged = merged.dropna(subset=["forecast_value_f", "sigma_f", "actual_value_f"])
     if merged.empty:
         return None
@@ -185,6 +204,7 @@ def build_tail_training_set(
     threshold: float,
     actuals_dir: Optional[Path | str] = None,
     archive_dir: Optional[Path | str] = None,
+    uncertainty_std_f: float = 2.0,
 ) -> pd.DataFrame:
     """Produce (raw_prob, actual_exceeded_0_1) training rows for a threshold market.
 
@@ -201,13 +221,22 @@ def build_tail_training_set(
     actuals_dir, archive_dir : Path or str, optional
         Override source directories (defaults to the module-level dirs in
         `src.station_truth`).
+    uncertainty_std_f : float, default 2.0
+        Fallback sigma for archive rows with NaN ensemble sigma. Matches the
+        matcher serving default at `src/matcher.py::match_kalshi_markets`.
 
     Returns
     -------
     pd.DataFrame with columns `_EMPTY_COLUMNS` in that order. Empty if either
     source file is missing/empty or the directories do not exist at all.
     """
-    merged = _load_and_join(city, market_type, actuals_dir, archive_dir)
+    merged = _load_and_join(
+        city,
+        market_type,
+        actuals_dir,
+        archive_dir,
+        uncertainty_std_f=uncertainty_std_f,
+    )
     if merged is None:
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
@@ -248,12 +277,19 @@ def build_bucket_training_set(
     bucket_high: float,
     actuals_dir: Optional[Path | str] = None,
     archive_dir: Optional[Path | str] = None,
+    uncertainty_std_f: float = 2.0,
 ) -> pd.DataFrame:
     """Produce (raw_bucket_prob, actual_in_bucket_0_1) training rows for a bucket market.
 
     The raw bucket probability is `F(bucket_high) - F(bucket_low)` under the
     forecast's normal distribution. The actual outcome is 1 if the station
     actual falls within `[bucket_low, bucket_high]` inclusive.
+
+    Parameters
+    ----------
+    uncertainty_std_f : float, default 2.0
+        Fallback sigma for archive rows with NaN ensemble sigma. Matches the
+        matcher serving default at `src/matcher.py::match_kalshi_markets`.
 
     Returns
     -------
@@ -265,7 +301,13 @@ def build_bucket_training_set(
             f"bucket_low ({bucket_low}) must be <= bucket_high ({bucket_high})"
         )
 
-    merged = _load_and_join(city, market_type, actuals_dir, archive_dir)
+    merged = _load_and_join(
+        city,
+        market_type,
+        actuals_dir,
+        archive_dir,
+        uncertainty_std_f=uncertainty_std_f,
+    )
     if merged is None:
         return pd.DataFrame(columns=_BUCKET_EMPTY_COLUMNS)
 

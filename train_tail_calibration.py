@@ -78,10 +78,12 @@ def train_threshold(
     direction: str,
     threshold: float,
     window_days: int,
+    uncertainty_std_f: float,
 ) -> dict:
     df = build_tail_training_set(
         city=city, market_type=market_type,
         direction=direction, threshold=threshold,
+        uncertainty_std_f=uncertainty_std_f,
     )
     if df.empty:
         return {"status": "no_data"}
@@ -113,10 +115,12 @@ def train_bucket(
     bucket_low: float,
     bucket_high: float,
     window_days: int,
+    uncertainty_std_f: float,
 ) -> dict:
     df = build_bucket_training_set(
         city=city, market_type=market_type,
         bucket_low=bucket_low, bucket_high=bucket_high,
+        uncertainty_std_f=uncertainty_std_f,
     )
     if df.empty:
         return {"status": "no_data"}
@@ -141,6 +145,11 @@ def main() -> None:
 
     config = load_app_config(_CONFIG_PATH)
     window = int(config.get("tail_calibration_window_days", args.window_days))
+    # Mirror the matcher's serving default (src/matcher.py::match_kalshi_markets)
+    # so archive rows with NaN ensemble sigma fall back to the same value the
+    # live path would use — otherwise training silently drops those rows and
+    # the calibrator sees a recency-biased 23% sample.
+    uncertainty_std_f = float(config.get("uncertainty_std_f", 2.0))
     ensure_data_directories()
 
     cities = [args.city] if args.city else list(load_station_map().keys())
@@ -152,7 +161,10 @@ def main() -> None:
             # Median threshold for the representative fit
             threshold = float(thresholds[len(thresholds) // 2])
             for direction in ("above", "below"):
-                result = train_threshold(city, mtype, direction, threshold, window)
+                result = train_threshold(
+                    city, mtype, direction, threshold, window,
+                    uncertainty_std_f,
+                )
                 log.info(
                     "%s %s %s@%.0fF tail: %s",
                     city, mtype, direction, threshold,
@@ -161,6 +173,7 @@ def main() -> None:
             # 1F-wide bucket centered on the threshold
             bucket_result = train_bucket(
                 city, mtype, threshold - 0.5, threshold + 0.5, window,
+                uncertainty_std_f,
             )
             log.info(
                 "%s %s bucket[%0.1f-%0.1f]: %s",

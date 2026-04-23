@@ -204,3 +204,104 @@ def test_build_bucket_training_set_rejects_inverted_bounds(tmp_path):
             actuals_dir=tmp_path / "a",
             archive_dir=tmp_path / "b",
         )
+
+
+def test_build_tail_training_set_fills_nan_sigma_with_fallback(tmp_path):
+    """Training must mirror serving: NaN ensemble sigma → uncertainty_std_f
+    (default 2.0), NOT drop the row. Otherwise training sees only ~23% of
+    the archive (live-scan days with ensemble-sigma filled), which creates
+    a recency bias the matcher never experiences at serve time.
+    """
+    import pandas as pd
+    from src.tail_training_data import build_tail_training_set
+    from src.matcher import _kalshi_threshold_yes_probability
+
+    actuals_dir = tmp_path / "station_actuals"
+    actuals_dir.mkdir()
+    pd.DataFrame({
+        "date": ["2026-04-01", "2026-04-02"],
+        "tmax_f": [70.0, 82.0],
+        "tmin_f": [55.0, 60.0],
+        "precip_in": [0.0, 0.0],
+        "precip_trace": [False, False],
+        "cli_station": ["NYC", "NYC"],
+        "source_url": ["", ""],
+        "city": ["New York", "New York"],
+        "source": ["cdo", "cdo"],
+        "archive_version": ["", ""],
+    }).to_csv(actuals_dir / "new_york.csv", index=False)
+
+    archive_dir = tmp_path / "forecast_archive"
+    archive_dir.mkdir()
+    pd.DataFrame({
+        "as_of_utc": ["2026-03-31T12:00:00+00:00", "2026-04-01T12:00:00+00:00"],
+        "date": ["2026-04-01", "2026-04-02"],
+        "forecast_high_f": [68.0, 75.0],
+        "forecast_low_f": [52.0, 58.0],
+        "ensemble_high_std_f": [None, 3.0],   # day 1 NaN, day 2 populated
+        "ensemble_low_std_f": [None, 2.0],
+        "forecast_model": ["best_match", "best_match"],
+        "forecast_lead_days": [1, 1],
+        "forecast_source": ["open_meteo_previous_runs"] * 2,
+    }).to_csv(archive_dir / "new_york.csv", index=False)
+
+    df = build_tail_training_set(
+        city="New York", market_type="high", direction="above",
+        threshold=80.0,
+        actuals_dir=actuals_dir, archive_dir=archive_dir,
+        uncertainty_std_f=2.0,
+    )
+    # BOTH rows must survive (not just the one with populated sigma)
+    assert len(df) == 2
+    assert list(df["date"]) == ["2026-04-01", "2026-04-02"]
+    # Day 1 sigma was filled from 2.0 then clipped → 2.0
+    assert df.iloc[0]["sigma_f"] == pytest.approx(2.0)
+    # Day 1 raw_prob must equal serving probability with sigma=2.0
+    expected_day1 = _kalshi_threshold_yes_probability("above", 80.0, 68.0, 2.0)
+    assert df.iloc[0]["raw_prob"] == pytest.approx(expected_day1, abs=1e-9)
+
+
+def test_build_bucket_training_set_fills_nan_sigma_with_fallback(tmp_path):
+    """Bucket builder must apply the same NaN-sigma fallback as the tail
+    builder and the live matcher.
+    """
+    import pandas as pd
+    from src.tail_training_data import build_bucket_training_set
+
+    actuals_dir = tmp_path / "station_actuals"
+    actuals_dir.mkdir()
+    pd.DataFrame({
+        "date": ["2026-04-01", "2026-04-02"],
+        "tmax_f": [70.5, 75.0],
+        "tmin_f": [50.0, 55.0],
+        "precip_in": [0.0, 0.0],
+        "precip_trace": [False, False],
+        "cli_station": ["NYC", "NYC"],
+        "source_url": ["", ""],
+        "city": ["New York", "New York"],
+        "source": ["cdo", "cdo"],
+        "archive_version": ["", ""],
+    }).to_csv(actuals_dir / "new_york.csv", index=False)
+
+    archive_dir = tmp_path / "forecast_archive"
+    archive_dir.mkdir()
+    pd.DataFrame({
+        "as_of_utc": ["2026-03-31T12:00:00+00:00", "2026-04-01T12:00:00+00:00"],
+        "date": ["2026-04-01", "2026-04-02"],
+        "forecast_high_f": [70.0, 76.0],
+        "forecast_low_f": [50.0, 55.0],
+        "ensemble_high_std_f": [None, 2.0],
+        "ensemble_low_std_f": [None, 1.5],
+        "forecast_model": ["best_match", "best_match"],
+        "forecast_lead_days": [1, 1],
+        "forecast_source": ["open_meteo_previous_runs"] * 2,
+    }).to_csv(archive_dir / "new_york.csv", index=False)
+
+    df = build_bucket_training_set(
+        city="New York", market_type="high",
+        bucket_low=70.0, bucket_high=71.0,
+        actuals_dir=actuals_dir, archive_dir=archive_dir,
+        uncertainty_std_f=2.0,
+    )
+    assert len(df) == 2
+    assert df.iloc[0]["sigma_f"] == pytest.approx(2.0)
