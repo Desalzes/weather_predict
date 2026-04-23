@@ -125,3 +125,94 @@ class TailBinaryCalibrator:
         obj._logistic._model = logistic_data["model"]
         obj._isotonic._model = isotonic_data["model"]
         return obj
+
+
+# ========================================================================
+# Bucket calibration (P(temp in [lo, hi]) for narrow bucket markets)
+# ========================================================================
+
+
+def _bucket_model_path(
+    city: str,
+    market_type: str,
+    kind: str,
+    model_dir: Optional[Path] = None,
+) -> Path:
+    """Per-pair bucket model path.
+
+    kind is one of "logistic" or "isotonic". Returned path is
+    {model_dir}/{slug}_{market_type}_bucket_{kind}.pkl.
+    """
+    directory = Path(model_dir) if model_dir is not None else CALIBRATION_MODELS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{_slugify_city(city)}_{market_type}_bucket_{kind}.pkl"
+
+
+class BucketDistributionalCalibrator:
+    """Two-stage calibration for bucket market probabilities. Per
+    (city, market_type) — no direction dimension since buckets are
+    inherently two-sided (the outcome is "temp in [lo, hi]" vs not).
+
+    Save format mirrors TailBinaryCalibrator: three sidecar pickles at a
+    single path prefix:
+      {prefix}_logistic.pkl — {"city": str, "model": LogisticRegression | None}
+      {prefix}_isotonic.pkl — {"city": str, "model": IsotonicRegression | None}
+      {prefix}_meta.pkl     — {"city": str, "market_type": str}
+    """
+
+    def __init__(self, city: str, market_type: str):
+        self.city = city
+        self.market_type = market_type
+        self._logistic = LogisticRainCalibrator(city=city)
+        self._isotonic = IsotonicRainCalibrator(city=city)
+
+    def fit(self, raw_bucket_probs, outcomes) -> None:
+        import numpy as np
+        self._logistic.fit(raw_bucket_probs, outcomes)
+        raw_arr = np.asarray(raw_bucket_probs, dtype=float)
+        logistic_preds = np.array([self._logistic.predict(p) for p in raw_arr])
+        self._isotonic.fit(logistic_preds, outcomes)
+
+    def predict(self, raw_bucket_prob: float) -> float:
+        p = _clip(raw_bucket_prob)
+        p = self._logistic.predict(p)
+        p = self._isotonic.predict(p)
+        return _clip(p)
+
+    def save(self, path_prefix) -> None:
+        """Save both stages plus metadata sidecar."""
+        prefix = Path(path_prefix)
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        self._logistic.save(Path(f"{prefix}_logistic.pkl"))
+        self._isotonic.save(Path(f"{prefix}_isotonic.pkl"))
+        meta = {"city": self.city, "market_type": self.market_type}
+        with Path(f"{prefix}_meta.pkl").open("wb") as f:
+            pickle.dump(meta, f)
+
+    @classmethod
+    def load(cls, path_prefix) -> "BucketDistributionalCalibrator":
+        """Reconstruct from sidecar pickles."""
+        prefix = Path(path_prefix)
+        with Path(f"{prefix}_logistic.pkl").open("rb") as f:
+            logistic_data = pickle.load(f)
+        with Path(f"{prefix}_isotonic.pkl").open("rb") as f:
+            isotonic_data = pickle.load(f)
+        meta_path = Path(f"{prefix}_meta.pkl")
+        if meta_path.exists():
+            with meta_path.open("rb") as f:
+                meta = pickle.load(f)
+        else:
+            logger.warning(
+                "Bucket calibration meta missing at %s; synthesizing "
+                "market_type='unknown'. This model will not match "
+                "TailCalibrationManager key lookups once Task 4 lands.",
+                meta_path,
+            )
+            meta = {
+                "city": logistic_data.get("city", "unknown"),
+                "market_type": "unknown",
+            }
+        obj = cls(city=meta["city"], market_type=meta["market_type"])
+        obj._logistic._model = logistic_data["model"]
+        obj._isotonic._model = isotonic_data["model"]
+        return obj

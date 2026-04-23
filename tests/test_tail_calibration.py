@@ -66,3 +66,49 @@ def test_tail_binary_calibrator_save_load(tmp_path):
     assert loaded.market_type == "high"
     assert loaded.direction == "above"
     assert abs(loaded.predict(0.4) - cal.predict(0.4)) < 1e-9
+
+
+def test_bucket_distributional_calibrator_fit_and_predict():
+    from src.tail_calibration import BucketDistributionalCalibrator
+
+    rng = np.random.default_rng(11)
+    n = 200
+    raw_probs = rng.uniform(0.05, 0.45, n)
+    # True bucket rate is 1.2x raw (systematic underconfidence)
+    true_rate = np.clip(raw_probs * 1.2, 0.001, 0.999)
+    outcomes = (rng.uniform(0, 1, n) < true_rate).astype(int)
+
+    cal = BucketDistributionalCalibrator(city="New York", market_type="high")
+    cal.fit(raw_probs, outcomes)
+
+    preds = [cal.predict(p) for p in [0.05, 0.2, 0.4]]
+    assert preds[0] < preds[1] < preds[2]
+    assert all(0.001 <= p <= 0.999 for p in preds)
+
+
+def test_bucket_calibrator_save_load(tmp_path):
+    from src.tail_calibration import BucketDistributionalCalibrator
+
+    rng = np.random.default_rng(13)
+    raw = rng.uniform(0.05, 0.40, 100)
+    out = (rng.uniform(0, 1, 100) < raw).astype(int)
+
+    cal = BucketDistributionalCalibrator(city="New York", market_type="high")
+    cal.fit(raw, out)
+    path = tmp_path / "new_york_high_bucket"
+    cal.save(path)
+
+    loaded = BucketDistributionalCalibrator.load(path)
+    assert loaded.city == "New York"
+    assert loaded.market_type == "high"
+    assert abs(loaded.predict(0.2) - cal.predict(0.2)) < 1e-9
+
+
+def test_bucket_distributional_calibrator_degenerate_outcomes_falls_through():
+    from src.tail_calibration import BucketDistributionalCalibrator
+
+    cal = BucketDistributionalCalibrator(city="New York", market_type="high")
+    cal.fit(np.array([0.1, 0.2, 0.3]), np.array([0, 0, 0]))
+    assert cal.predict(0.15) == pytest.approx(0.15)
+    assert cal.predict(0.0) == 0.001
+    assert cal.predict(1.0) == 0.999
