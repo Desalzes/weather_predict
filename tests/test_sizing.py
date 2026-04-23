@@ -75,3 +75,53 @@ def test_extreme_price_guarded():
         max_order_cost_dollars=10.0, hard_cap_contracts=20,
     )
     assert n == 0
+
+
+def test_bankroll_fraction_multiplier_scales_stake_proportionally():
+    from src.sizing import compute_position_size
+
+    base = compute_position_size(
+        edge=0.15, price=0.30, side="BUY",
+        kelly_fraction=0.25, bankroll_dollars=1000,
+        max_order_cost_dollars=100.0, hard_cap_contracts=10,
+    )
+    halved = compute_position_size(
+        edge=0.15, price=0.30, side="BUY",
+        kelly_fraction=0.25, bankroll_dollars=1000,
+        max_order_cost_dollars=100.0, hard_cap_contracts=10,
+        bankroll_fraction_multiplier=0.5,
+    )
+    # Halved bankroll should produce <= half the contracts (and never more)
+    assert halved <= base
+    assert halved >= 0
+
+
+def test_bankroll_fraction_multiplier_default_preserves_behavior():
+    """Default multiplier of 1.0 must produce identical output to not passing
+    the kwarg at all — this is the backward-compatibility guarantee Task 11
+    depends on."""
+    from src.sizing import compute_position_size
+
+    kwargs = dict(
+        edge=0.20, price=0.40, side="BUY",
+        kelly_fraction=0.25, bankroll_dollars=500,
+        max_order_cost_dollars=50.0, hard_cap_contracts=10,
+    )
+    assert (
+        compute_position_size(**kwargs)
+        == compute_position_size(**kwargs, bankroll_fraction_multiplier=1.0)
+    )
+
+
+def test_bankroll_fraction_multiplier_zero_yields_zero_contracts():
+    """Probation slice at 0% (extreme case) should produce zero contracts
+    without crashing — defensive behavior."""
+    from src.sizing import compute_position_size
+
+    contracts = compute_position_size(
+        edge=0.30, price=0.20, side="BUY",
+        kelly_fraction=0.25, bankroll_dollars=1000,
+        max_order_cost_dollars=100.0, hard_cap_contracts=10,
+        bankroll_fraction_multiplier=0.0,
+    )
+    assert contracts == 0

@@ -37,6 +37,7 @@ def compute_position_size(
     bankroll_dollars: float,
     max_order_cost_dollars: float,
     hard_cap_contracts: int,
+    bankroll_fraction_multiplier: float = 1.0,
 ) -> int:
     """Return the number of contracts to trade under a fractional-Kelly criterion.
 
@@ -57,13 +58,30 @@ def compute_position_size(
         Hard cap on the dollar cost of a single order.
     hard_cap_contracts:
         Hard cap on the number of contracts regardless of other limits.
+    bankroll_fraction_multiplier:
+        Scales the effective bankroll used for Kelly sizing. Default 1.0.
 
     Returns
     -------
     int
         Number of contracts (>= 0).  Returns 0 for zero or wrong-sign edge,
         degenerate prices, or when any limit resolves to zero.
+
+    Notes
+    -----
+    The ``bankroll_fraction_multiplier`` (default 1.0) scales the effective
+    bankroll used for Kelly sizing. Used by slice-aware callers: P2 probation
+    opportunities pass 0.10 so their stake is computed against 10% of the
+    total bankroll rather than 100%. At 1.0 (the default) behavior is
+    identical to pre-P2.
     """
+    # Apply the slice multiplier to the bankroll up-front so every downstream
+    # computation (stake_dollars in particular) uses the scaled value. Scaling
+    # the bankroll — not the Kelly fraction itself — preserves Kelly semantics:
+    # the stake is ``kelly_fraction * bankroll * kelly_full`` and only the
+    # bankroll term is slice-dependent.
+    bankroll_dollars = float(bankroll_dollars) * float(bankroll_fraction_multiplier)
+
     # Guard degenerate prices that cause division by zero or nonsensical Kelly.
     if price <= 0.0 or price >= 1.0:
         return 0
