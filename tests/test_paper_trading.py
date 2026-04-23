@@ -932,5 +932,77 @@ def test_settle_paper_trades_reports_category_breakdown(tmp_path):
     assert cb["correlation_sample_size"] == 5
 
 
+def test_legacy_ledger_migrates_bankroll_slice_to_temperature_buy(tmp_path):
+    import pandas as pd
+    from src.paper_trading import _ensure_ledger_schema
+
+    legacy = tmp_path / "legacy.csv"
+    pd.DataFrame({
+        "trade_id": ["t1"], "scan_id": ["s1"],
+        "status": ["settled"], "source": ["kalshi"],
+        "ticker": ["KXHIGHT"], "city": ["Boston"],
+        "market_type": ["high"], "market_category": ["temperature"],
+        "market_date": ["2026-04-20"],
+    }).to_csv(legacy, index=False)
+
+    df = _ensure_ledger_schema(pd.read_csv(legacy))
+    assert "bankroll_slice" in df.columns
+    assert df.iloc[0]["bankroll_slice"] == "temperature_buy"
+
+
+def test_log_paper_trades_records_bankroll_slice(tmp_path):
+    from src.paper_trading import log_paper_trades
+
+    opps = [{
+        "source": "kalshi", "ticker": "KXHIGHT-T80",
+        "market_category": "temperature",
+        "city": "Boston", "market_type": "high",
+        "market_date": "2026-04-21", "outcome": "Yes",
+        "position_side": "yes", "direction": "BUY",
+        "our_probability": 0.6, "market_price": 0.35,
+        "edge": 0.25, "abs_edge": 0.25,
+        "bankroll_slice": "temperature_buy",
+        "forecast_blend_source": "open-meteo",
+        "forecast_calibration_source": "isotonic",
+        "probability_calibration_source": "isotonic",
+        "hours_to_settlement": 12,
+        "raw_probability": 0.55, "volume24hr": 2500,
+        "yes_outcome": True,
+    }]
+    ledger = tmp_path / "ledger.csv"
+    log_paper_trades(opps, scan_timestamp="2026-04-20T12:00:00+00:00",
+                     ledger_path=ledger, contracts=1)
+    import pandas as pd
+    df = pd.read_csv(ledger)
+    assert df.iloc[0]["bankroll_slice"] == "temperature_buy"
+
+
+def test_rain_opportunity_defaults_bankroll_slice_to_rain_binary(tmp_path):
+    from src.paper_trading import log_paper_trades
+
+    opps = [{
+        "source": "kalshi", "ticker": "KXRAINNYC-26APR21-T0",
+        "market_category": "rain",
+        "city": "New York", "market_type": "rain_binary",
+        "market_date": "2026-04-21", "outcome": "Yes",
+        "position_side": "yes", "direction": "BUY",
+        "our_probability": 0.8, "market_price": 0.55,
+        "edge": 0.25, "abs_edge": 0.25,
+        # NOTE: no bankroll_slice in the opp — should default to "rain_binary"
+        "forecast_blend_source": "open-meteo",
+        "forecast_calibration_source": "logistic",
+        "probability_calibration_source": "isotonic",
+        "hours_to_settlement": 10,
+        "raw_probability": 0.7, "volume24hr": 1500,
+        "yes_outcome": True,
+    }]
+    ledger = tmp_path / "ledger.csv"
+    log_paper_trades(opps, scan_timestamp="2026-04-20T12:00:00+00:00",
+                     ledger_path=ledger, contracts=1)
+    import pandas as pd
+    df = pd.read_csv(ledger)
+    assert df.iloc[0]["bankroll_slice"] == "rain_binary"
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -115,6 +115,7 @@ class ConfigLoadingTests(unittest.TestCase):
             "src.strategy_policy": types.SimpleNamespace(
                 load_strategy_policy=lambda path_value=None: ({}, Path("strategy/strategy_policy.json")),
                 filter_opportunities_for_policy=lambda opportunities, policy: opportunities,
+                apply_tail_unblocks=lambda opportunity, policy, threshold_direction=None: opportunity,
             ),
             "src.paper_trading": types.SimpleNamespace(
                 format_paper_trade_summary=lambda summary: "paper summary",
@@ -204,6 +205,7 @@ class ConfigLoadingTests(unittest.TestCase):
             "src.strategy_policy": types.SimpleNamespace(
                 load_strategy_policy=lambda path_value=None: ({}, Path("strategy/strategy_policy.json")),
                 filter_opportunities_for_policy=lambda opportunities, policy: opportunities,
+                apply_tail_unblocks=lambda opportunity, policy, threshold_direction=None: opportunity,
             ),
             "src.paper_trading": types.SimpleNamespace(
                 format_paper_trade_summary=lambda summary: "paper summary",

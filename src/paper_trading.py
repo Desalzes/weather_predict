@@ -41,6 +41,7 @@ OBJECT_COLUMNS = [
     "city",
     "market_type",
     "market_category",
+    "bankroll_slice",
     "market_date",
     "outcome",
     "position_side",
@@ -67,6 +68,7 @@ LEDGER_COLUMNS = [
     "city",
     "market_type",
     "market_category",
+    "bankroll_slice",
     "market_date",
     "outcome",
     "position_side",
@@ -133,6 +135,17 @@ def _coerce_text(value: object, default: str | None = None) -> str | None:
         pass
     text = str(value).strip()
     return text if text else default
+
+
+def _default_bankroll_slice_for_category(market_category: str | None) -> str:
+    """Default bankroll slice when opportunity dict doesn't set it explicitly.
+
+    Rain opportunities go to rain_binary; everything else (temperature,
+    unknown, None) goes to temperature_buy.
+    """
+    if str(market_category or "").strip().lower() == "rain":
+        return "rain_binary"
+    return "temperature_buy"
 
 
 def _normalize_iso_timestamp(value: str | datetime | None = None) -> str:
@@ -339,14 +352,20 @@ def _apply_routing_metadata_defaults(frame: pd.DataFrame) -> pd.DataFrame:
 def _ensure_ledger_schema(df: "pd.DataFrame") -> "pd.DataFrame":
     """Backfill newly-introduced ledger columns on legacy frames.
 
-    Currently guarantees ``market_category`` exists and defaults missing
-    entries to ``"temperature"``. Preserves any existing migration logic
-    performed downstream (e.g. ``legacy_unknown`` routing backfill).
+    Guarantees ``market_category`` exists and defaults missing entries to
+    ``"temperature"``; guarantees ``bankroll_slice`` exists and defaults
+    missing entries to ``"temperature_buy"``. Preserves any existing
+    migration logic performed downstream (e.g. ``legacy_unknown`` routing
+    backfill).
     """
     if "market_category" not in df.columns:
         df["market_category"] = "temperature"
     else:
         df["market_category"] = df["market_category"].fillna("temperature")
+    if "bankroll_slice" not in df.columns:
+        df["bankroll_slice"] = "temperature_buy"
+    else:
+        df["bankroll_slice"] = df["bankroll_slice"].fillna("temperature_buy")
     return df
 
 
@@ -446,6 +465,10 @@ def paper_trade_record_from_opportunity(
         "city": opportunity.get("city"),
         "market_type": opportunity.get("market_type"),
         "market_category": _coerce_text(opportunity.get("market_category"), default="temperature"),
+        "bankroll_slice": _coerce_text(
+            opportunity.get("bankroll_slice"),
+            default=_default_bankroll_slice_for_category(opportunity.get("market_category")),
+        ),
         "market_date": _normalize_date(opportunity.get("market_date")),
         "outcome": opportunity.get("outcome"),
         "position_side": side,

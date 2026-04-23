@@ -25,6 +25,8 @@ fetch_kalshi / fetch_polymarket                          ↓
 | `matcher.py` | Normal-CDF probability for threshold/bucket markets, edge computation |
 | `rain_calibration.py` | Logistic + Isotonic rain-probability calibrators + RainCalibrationManager |
 | `rain_matcher.py` | Parse KXRAIN binary outcomes, compute probability & edge, mirror temp opportunity shape |
+| `tail_calibration.py` | TailBinaryCalibrator + BucketDistributionalCalibrator + TailCalibrationManager; composes P1 LogisticRainCalibrator/IsotonicRainCalibrator for temperature tails (P2) |
+| `tail_training_data.py` | build_tail_training_set + build_bucket_training_set — forecast-archive × station-actuals joins for tail calibration (P2) |
 | `calibration.py` | EMOS (linear bias correction) + isotonic (probability recalibration) |
 | `station_truth.py` | NWS CLI + NCEI CDO truth ingestion, training-set joins |
 | `paper_trading.py` | Ledger logging, deterministic fee accounting, settlement |

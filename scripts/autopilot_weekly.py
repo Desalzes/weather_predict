@@ -65,6 +65,26 @@ def main() -> int:
     rc = _run([PYTHON, "train_calibration.py", "--days", str(args.days)], args.dry_run)
     status["steps"]["train_calibration"] = rc
 
+    # 2b) Tail calibration retrain (P2) - gated behind enable_tail_calibration
+    if config.get("enable_tail_calibration", False):
+        log.info("Running tail calibration retrain...")
+        try:
+            rc = _run([PYTHON, "train_tail_calibration.py"], args.dry_run)
+            status["steps"]["train_tail_calibration"] = rc
+            log.info("Running tail calibration holdout evaluation...")
+            rc = _run(
+                [PYTHON, "evaluate_tail_calibration.py",
+                 "--days", "400",
+                 "--holdout-days", "30"],
+                args.dry_run,
+            )
+            status["steps"]["evaluate_tail_calibration"] = rc
+        except Exception as exc:
+            log.warning("Tail calibration retrain/evaluation failed: %s", exc)
+            status["steps"]["tail_calibration_error"] = str(exc)
+    else:
+        log.info("Tail calibration disabled (enable_tail_calibration=false); skipping.")
+
     # 3) Evaluate NGR vs raw on chronological holdout
     rc = _run(
         [PYTHON, "scripts/evaluate_ngr.py",
