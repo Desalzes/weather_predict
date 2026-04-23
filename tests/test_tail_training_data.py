@@ -75,8 +75,9 @@ def test_build_tail_training_set_joins_forecasts_and_actuals(tmp_path):
 
     assert list(df["date"]) == dates
     assert list(df["actual_exceeded_0_1"]) == [0, 1, 0]
-    # z = (80 - 75) / 3 = 1.6667 → P(X > 80) ≈ 0.0478
-    assert df["raw_prob"].iloc[1] == pytest.approx(0.0478, abs=0.002)
+    # raw_prob for 2026-04-02 with +0.99 offset: P(X > 80.99) with mean=75, std=3
+    # → z=(80.99-75)/3 ≈ 1.997, P ≈ 0.023
+    assert df["raw_prob"].iloc[1] == pytest.approx(0.023, abs=0.005)
     assert df["actual_exceeded_0_1"].dtype.kind in ("i", "u")
 
 
@@ -109,3 +110,38 @@ def test_build_bucket_training_set_joins_forecasts_and_actuals(tmp_path):
     # Day-1: F(71) - F(70) with mean=70, std=2 → 0.6915 - 0.5 = 0.1915
     assert df["raw_bucket_prob"].iloc[0] == pytest.approx(0.1915, abs=0.002)
     assert df["actual_in_bucket_0_1"].dtype.kind in ("i", "u")
+
+
+def test_raw_prob_above_matches_matcher_kalshi_threshold_convention():
+    """Training-side raw_prob must use the same +0.99 offset as the live
+    matcher's _kalshi_threshold_yes_probability for direction='above'."""
+    from src.tail_training_data import _raw_prob_above
+    from src.matcher import _kalshi_threshold_yes_probability
+
+    for forecast, threshold, sigma in [
+        (75.0, 80.0, 3.0),
+        (65.0, 70.0, 2.5),
+        (88.0, 85.0, 2.0),  # forecast above threshold
+    ]:
+        training = _raw_prob_above(forecast, threshold, sigma)
+        serving = _kalshi_threshold_yes_probability("above", threshold, forecast, sigma)
+        assert abs(training - serving) < 1e-9, (
+            f"train/serve skew at forecast={forecast}, threshold={threshold}: "
+            f"training={training}, serving={serving}"
+        )
+
+
+def test_raw_prob_below_matches_matcher_kalshi_threshold_convention():
+    """Training-side raw_prob must use the same (no-offset) convention as the
+    live matcher's _kalshi_threshold_yes_probability for direction='below'."""
+    from src.tail_training_data import _raw_prob_below
+    from src.matcher import _kalshi_threshold_yes_probability
+
+    for forecast, threshold, sigma in [
+        (75.0, 80.0, 3.0),
+        (65.0, 70.0, 2.5),
+        (60.0, 65.0, 2.0),
+    ]:
+        training = _raw_prob_below(forecast, threshold, sigma)
+        serving = _kalshi_threshold_yes_probability("below", threshold, forecast, sigma)
+        assert abs(training - serving) < 1e-9

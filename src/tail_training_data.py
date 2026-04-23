@@ -61,21 +61,30 @@ def _normal_cdf(x: float, mu: float = 0.0, sigma: float = 1.0) -> float:
 
 
 def _threshold_exceeded(actual_value: float, threshold: float, direction: str) -> int:
-    """Return 1 if the actual value exceeds the threshold in the given direction."""
+    """Binary outcome label matching Kalshi's resolution convention.
+
+    direction="above": YES iff actual > threshold + 0.99 (matches matcher.py serving
+    math — Kalshi "above T" settles YES only when measured tmax is T+1 or higher
+    given one-decimal-place reporting). direction="below": YES iff actual < threshold
+    (no offset).
+    """
     if direction == "above":
-        return 1 if actual_value > threshold else 0
+        return 1 if actual_value > threshold + 0.99 else 0
     if direction == "below":
         return 1 if actual_value < threshold else 0
     raise ValueError(f"Unknown direction {direction!r}; expected 'above' or 'below'.")
 
 
 def _raw_prob_above(forecast: float, threshold: float, sigma: float) -> float:
-    """P(X > threshold) under N(forecast, sigma)."""
-    return 1.0 - _normal_cdf(threshold, forecast, sigma)
+    """P(X > threshold + 0.99) — matches src/matcher.py._kalshi_threshold_yes_probability
+    for direction="above". Kalshi "above T" settles YES only when measured tmax is
+    T+1 or higher (assuming one-decimal-place reporting convention)."""
+    return 1.0 - _normal_cdf(threshold + 0.99, forecast, sigma)
 
 
 def _raw_prob_below(forecast: float, threshold: float, sigma: float) -> float:
-    """P(X < threshold) under N(forecast, sigma)."""
+    """P(X < threshold) under N(forecast, sigma). Matches matcher.py's
+    direction="below" convention (no offset)."""
     return _normal_cdf(threshold, forecast, sigma)
 
 
