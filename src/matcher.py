@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from src.calibration import CalibrationManager
+    from src.tail_calibration import TailCalibrationManager
 
 logger = logging.getLogger("weather.matcher")
 
@@ -358,6 +359,7 @@ def match_kalshi_markets(
     uncertainty_std_f: float = 2.0,
     ensemble_data: Optional[dict] = None,
     calibration_manager: Optional["CalibrationManager"] = None,
+    tail_calibration_manager: Optional["TailCalibrationManager"] = None,
     hrrr_data: Optional[dict] = None,
     hrrr_blend_horizon_hours: float = 18.0,
     now_utc: Optional[datetime] = None,
@@ -493,7 +495,7 @@ def match_kalshi_markets(
         edge = our_prob - market_price
         hours_available = len(temps_c)
 
-        opps.append({
+        opp = {
             "source": "kalshi",
             "ticker": ticker,
             "market_question": m.get("title", ""),
@@ -527,7 +529,27 @@ def match_kalshi_markets(
             "settlement_high_f": settlement_high_f,
             "yes_bid": m.get("yes_bid", 0),
             "yes_ask": m.get("yes_ask", 0),
-        })
+        }
+
+        if tail_calibration_manager is not None:
+            tail_direction = _kalshi_threshold_direction(m)
+            # Default "above" when direction isn't parseable — bucket markets
+            # pass is_bucket=True so direction is ignored downstream.
+            direction_for_tail = tail_direction or "above"
+            tail_result = tail_calibration_manager.calibrate_tail_probability(
+                city=city,
+                market_type=mtype,
+                direction=direction_for_tail,
+                is_bucket=is_bucket,
+                raw_prob=raw_prob,
+            )
+            if tail_result is not None:
+                prob_tail = float(tail_result["calibrated_prob"])
+                opp["our_probability_tail"] = round(prob_tail, 4)
+                opp["edge_tail"] = round(prob_tail - float(market_price), 4)
+                opp["tail_calibration_source"] = tail_result.get("source", "tail")
+
+        opps.append(opp)
 
     filtered = [o for o in opps if o["abs_edge"] >= min_edge]
     filtered.sort(key=lambda x: x["abs_edge"], reverse=True)
