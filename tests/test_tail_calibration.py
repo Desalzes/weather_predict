@@ -19,6 +19,35 @@ def test_tail_binary_calibrator_fit_and_predict():
     assert preds[0] < preds[1] < preds[2]  # monotone
     assert all(0.001 <= p <= 0.999 for p in preds)
 
+    # Directional check: fixture biases toward higher true rates than raw
+    # (true = 1.3 * raw + 0.02). A fitted chain should nudge predict(0.5) up.
+    assert cal.predict(0.5) > 0.55, (
+        f"expected bias correction to push predict(0.5) above 0.55, got {cal.predict(0.5)}"
+    )
+
+
+def test_tail_binary_calibrator_degenerate_outcomes_falls_through():
+    """All-zero outcomes must fall through to clipped raw probability."""
+    from src.tail_calibration import TailBinaryCalibrator
+
+    cal = TailBinaryCalibrator(city="New York", market_type="high", direction="above")
+    cal.fit(np.array([0.2, 0.5, 0.8]), np.array([0, 0, 0]))
+    # Both stages set _model = None; predict returns clipped raw probability
+    assert cal.predict(0.5) == pytest.approx(0.5)
+    assert cal.predict(0.0) == 0.001
+    assert cal.predict(1.0) == 0.999
+
+
+def test_tail_binary_calibrator_all_ones_outcomes_falls_through():
+    """All-one outcomes must also fall through cleanly (no crash)."""
+    from src.tail_calibration import TailBinaryCalibrator
+
+    cal = TailBinaryCalibrator(city="New York", market_type="low", direction="below")
+    cal.fit(np.array([0.2, 0.5, 0.8]), np.array([1, 1, 1]))
+    assert cal.predict(0.5) == pytest.approx(0.5)
+    assert cal.predict(0.0) == 0.001
+    assert cal.predict(1.0) == 0.999
+
 
 def test_tail_binary_calibrator_save_load(tmp_path):
     from src.tail_calibration import TailBinaryCalibrator

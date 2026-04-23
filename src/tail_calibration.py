@@ -23,6 +23,11 @@ from src.station_truth import CALIBRATION_MODELS_DIR, _slugify_city
 logger = logging.getLogger("weather.tail_calibration")
 
 
+# ========================================================================
+# Threshold-tail calibration (per-direction high/low markets)
+# ========================================================================
+
+
 def _tail_model_path(
     city: str,
     market_type: str,
@@ -101,7 +106,12 @@ class TailBinaryCalibrator:
             with meta_path.open("rb") as f:
                 meta = pickle.load(f)
         else:
-            # Fallback for pre-meta saves — unknown market_type/direction
+            logger.warning(
+                "Tail calibration meta missing at %s; synthesizing "
+                "market_type/direction as 'unknown'. This model will not match "
+                "TailCalibrationManager key lookups once Task 4 lands.",
+                meta_path,
+            )
             meta = {
                 "city": logistic_data.get("city", "unknown"),
                 "market_type": "unknown",
