@@ -279,5 +279,65 @@ def test_temperature_policy_with_category_rejects_rain_opps():
     assert filter_opportunities_for_policy([rain_opp], temp_policy) == []
 
 
+def test_apply_tail_unblocks_routes_sell_when_pair_is_listed():
+    from src.strategy_policy import apply_tail_unblocks
+
+    opp = {
+        "city": "Austin",
+        "market_type": "high",
+        "direction": "SELL",
+        "is_bucket": False,
+        "our_probability": 0.4,
+        "our_probability_tail": 0.15,
+        "market_price": 0.3,
+        "edge": 0.1,
+        "edge_tail": -0.15,
+    }
+    policy = {
+        "tail_unblocks": {
+            "threshold_sell": [
+                {"city": "Austin", "market_type": "high", "direction": "above",
+                 "bankroll_slice": "probation"}
+            ],
+            "bucket": [],
+        },
+    }
+    routed = apply_tail_unblocks(opp, policy, threshold_direction="above")
+    assert routed is not None
+    assert routed["our_probability"] == 0.15
+    assert routed["edge"] == -0.15
+    assert routed["bankroll_slice"] == "probation"
+
+
+def test_apply_tail_unblocks_drops_when_pair_not_listed():
+    from src.strategy_policy import apply_tail_unblocks
+
+    opp = {
+        "city": "Austin", "market_type": "high", "direction": "SELL",
+        "is_bucket": False,
+        "our_probability": 0.4, "our_probability_tail": 0.15,
+        "market_price": 0.3, "edge": 0.1, "edge_tail": -0.15,
+    }
+    policy = {"tail_unblocks": {"threshold_sell": [], "bucket": []}}
+    assert apply_tail_unblocks(opp, policy, threshold_direction="above") is None
+
+
+def test_apply_tail_unblocks_passthrough_for_buy():
+    """BUY opportunities are not routed through tail_unblocks."""
+    from src.strategy_policy import apply_tail_unblocks
+
+    opp = {
+        "city": "Austin", "market_type": "high", "direction": "BUY",
+        "is_bucket": False,
+        "our_probability": 0.6, "our_probability_tail": 0.7,
+        "market_price": 0.3, "edge": 0.3, "edge_tail": 0.4,
+    }
+    policy = {"tail_unblocks": {"threshold_sell": [], "bucket": []}}
+    # BUY opportunities are untouched by this filter — returned as-is
+    routed = apply_tail_unblocks(opp, policy, threshold_direction="above")
+    assert routed is opp
+    assert routed["our_probability"] == 0.6  # unchanged
+
+
 if __name__ == "__main__":
     unittest.main()

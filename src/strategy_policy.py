@@ -186,3 +186,66 @@ def filter_opportunities_for_policy(opportunities: list[dict], policy: dict) -> 
 
     filtered.sort(key=lambda item: float(item.get("abs_edge", 0.0) or 0.0), reverse=True)
     return filtered[:max_candidates]
+
+
+def apply_tail_unblocks(
+    opportunity: dict,
+    policy: dict,
+    threshold_direction: "str | None" = None,
+) -> "dict | None":
+    """Tail-unblock filter.
+
+    For SELL / bucket opportunities that would be blocked by
+    allowed_position_sides / allowed_settlement_rules, consults the
+    policy's tail_unblocks list. If the (city, market_type, direction)
+    pair is listed, swaps in the tail probability as the decision value
+    and tags bankroll_slice. Otherwise returns None (filter-out).
+
+    BUY opportunities pass through unchanged (not SELL, not bucket).
+    """
+    direction = str(opportunity.get("direction", "")).upper()
+    is_bucket = bool(opportunity.get("is_bucket", False))
+
+    # BUY-side thresholds aren't tail-routed — they use existing isotonic path
+    if direction == "BUY" and not is_bucket:
+        return opportunity
+
+    tail_unblocks = (policy or {}).get("tail_unblocks") or {}
+    city = opportunity.get("city")
+    market_type = opportunity.get("market_type")
+
+    # Bucket route
+    if is_bucket:
+        allowed = [
+            e for e in tail_unblocks.get("bucket", [])
+            if e.get("city") == city and e.get("market_type") == market_type
+        ]
+        if not allowed:
+            return None
+        entry = allowed[0]
+    else:
+        # SELL threshold route
+        allowed = [
+            e for e in tail_unblocks.get("threshold_sell", [])
+            if (
+                e.get("city") == city
+                and e.get("market_type") == market_type
+                and e.get("direction") == threshold_direction
+            )
+        ]
+        if not allowed:
+            return None
+        entry = allowed[0]
+
+    tail_prob = opportunity.get("our_probability_tail")
+    tail_edge = opportunity.get("edge_tail")
+    if tail_prob is None or tail_edge is None:
+        # Policy lists the pair but models didn't populate tail fields —
+        # treat as blocked to stay safe.
+        return None
+
+    routed = dict(opportunity)
+    routed["our_probability"] = tail_prob
+    routed["edge"] = tail_edge
+    routed["bankroll_slice"] = entry.get("bankroll_slice", "probation")
+    return routed

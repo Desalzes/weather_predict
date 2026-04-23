@@ -1,28 +1,40 @@
 {
-  "policy_version": 4,
+  "policy_version": 5,
   "status": "active",
-  "generated_at_utc": "2026-04-16T20:00:00Z",
-  "generated_by": "ngr_calibration_upgrade",
-  "objective": "Take threshold trades with >= 8% calibrated edge, size by quarter-Kelly, expand candidate pool to accumulate paper data.",
+  "generated_at_utc": "2026-04-23T00:00:00Z",
+  "generated_by": "claude_session_review",
+  "objective": "BUY-only, liquid, high-conviction threshold trades. SELL-side blocked after paper trade evidence showed -50.6% ROI on 35 SELL trades.",
   "selection": {
     "sources": ["kalshi"],
-    "min_abs_edge": 0.08,
+    "min_abs_edge": 0.15,
     "min_volume24hr": 2000,
-    "max_candidates_per_scan": 8,
-    "max_hours_to_settlement": 48,
+    "max_candidates_per_scan": 3,
+    "max_hours_to_settlement": 24,
     "allowed_market_types": ["high", "low"],
     "allowed_settlement_rules": ["lte", "gt"],
+    "allowed_position_sides": ["yes"],
     "allowed_cities": [],
     "blocked_cities": ["Washington DC"]
   },
   "execution": {
-    "sizing": "quarter_kelly",
-    "max_contracts_per_trade": 20,
-    "max_new_orders_per_day": 10,
+    "max_contracts_per_trade": 1,
+    "max_new_orders_per_day": 3,
     "max_order_cost_dollars": 10.0,
     "time_in_force": "fill_or_kill"
   },
   "rationale": {
-    "v4_changes": "Lowered min_abs_edge 0.15 -> 0.08 now that NGR sigma is calibrated per city+regime. Widened lead horizon 24h -> 48h. Bumped max_candidates_per_scan 3 -> 8 and max_new_orders_per_day 3 -> 10 to accumulate paper data faster. Switched execution sizing to quarter-Kelly with hard cap 20 contracts. v3 preserved as strategy_policy_v3.json for rollback."
+    "v5_changes": "Added tail_unblocks (empty at launch) and bankroll_slices. P2 tail-calibration infrastructure ships behind enable_tail_calibration flag; no behavior change until operator adds pairs to tail_unblocks after two consecutive weekly scorecards agree qualifies_for_unblock.",
+    "v4_changes": "Added allowed_position_sides: [yes] to block SELL-side trades. After 81 settled paper trades under v3, SELL-side had -50.6% ROI across 35 trades (8W/27L) while BUY-side had +9.4% ROI across 46 trades (9W/37L). The EMOS models appear miscalibrated on the negative tail - predicting rare events wont happen when they often do. BUY-only means cheap lottery-ticket bets at low entry prices with asymmetric payoff when the model is correct.",
+    "v3_changes": "Added allowed_settlement_rules: [lte, gt] to block bucket markets. 8/9 bucket trades lost under v2.",
+    "v2_changes": "Tightened from v1: min_abs_edge 0.08 -> 0.15, min_volume24hr 500 -> 2000, max_candidates 5 -> 3, blocked Washington DC."
+  },
+  "tail_unblocks": {
+    "threshold_sell": [],
+    "bucket": []
+  },
+  "bankroll_slices": {
+    "temperature_buy": 0.70,
+    "rain_binary": 0.20,
+    "probation": 0.10
   }
 }
