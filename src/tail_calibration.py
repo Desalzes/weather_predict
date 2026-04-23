@@ -216,3 +216,106 @@ class BucketDistributionalCalibrator:
         obj._logistic._model = logistic_data["model"]
         obj._isotonic._model = isotonic_data["model"]
         return obj
+
+
+# ========================================================================
+# Runtime manager (mtime-invalidating cache for both calibrator types)
+# ========================================================================
+
+
+class TailCalibrationManager:
+    """Per-pair loader + cache for tail and bucket calibration models.
+    mtime-based invalidation so retrains on disk are picked up without
+    process restart.
+
+    Entry point: calibrate_tail_probability(city, market_type, direction,
+    is_bucket, raw_prob) -> {"calibrated_prob", "source"} | None.
+    """
+
+    def __init__(self, model_dir: Optional[Path] = None):
+        self._model_dir = Path(model_dir) if model_dir else CALIBRATION_MODELS_DIR
+        # cache shape: {key: (mtime_or_None, model_or_None)}
+        self._threshold_cache: dict = {}
+        self._bucket_cache: dict = {}
+
+    def _threshold_prefix(self, city: str, market_type: str, direction: str) -> Path:
+        return self._model_dir / f"{_slugify_city(city)}_{market_type}_{direction}_tail"
+
+    def _bucket_prefix(self, city: str, market_type: str) -> Path:
+        return self._model_dir / f"{_slugify_city(city)}_{market_type}_bucket"
+
+    def _latest_mtime(self, prefix: Path) -> Optional[float]:
+        """Latest mtime across the three sidecar files for a prefix.
+        Returns None if no sidecar files exist.
+        """
+        mtimes = []
+        for suffix in ("_logistic.pkl", "_isotonic.pkl", "_meta.pkl"):
+            p = Path(f"{prefix}{suffix}")
+            if p.exists():
+                mtimes.append(p.stat().st_mtime)
+        return max(mtimes) if mtimes else None
+
+    def _get_threshold(
+        self, city: str, market_type: str, direction: str,
+    ) -> Optional[TailBinaryCalibrator]:
+        key = (city, market_type, direction)
+        prefix = self._threshold_prefix(city, market_type, direction)
+        current_mtime = self._latest_mtime(prefix)
+        cached = self._threshold_cache.get(key)
+        if cached is None or cached[0] != current_mtime:
+            model = None
+            if current_mtime is not None:
+                try:
+                    model = TailBinaryCalibrator.load(prefix)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed loading tail model for %s/%s/%s: %s",
+                        city, market_type, direction, exc,
+                    )
+                    model = None
+            self._threshold_cache[key] = (current_mtime, model)
+        return self._threshold_cache[key][1]
+
+    def _get_bucket(
+        self, city: str, market_type: str,
+    ) -> Optional[BucketDistributionalCalibrator]:
+        key = (city, market_type)
+        prefix = self._bucket_prefix(city, market_type)
+        current_mtime = self._latest_mtime(prefix)
+        cached = self._bucket_cache.get(key)
+        if cached is None or cached[0] != current_mtime:
+            model = None
+            if current_mtime is not None:
+                try:
+                    model = BucketDistributionalCalibrator.load(prefix)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed loading bucket model for %s/%s: %s",
+                        city, market_type, exc,
+                    )
+                    model = None
+            self._bucket_cache[key] = (current_mtime, model)
+        return self._bucket_cache[key][1]
+
+    def calibrate_tail_probability(
+        self,
+        city: str,
+        market_type: str,
+        direction: str,
+        is_bucket: bool,
+        raw_prob: float,
+    ) -> Optional[dict]:
+        """Returns {"calibrated_prob", "source"} or None if no model exists.
+
+        For is_bucket=True the direction arg is ignored.
+        """
+        if is_bucket:
+            cal = self._get_bucket(city, market_type)
+        else:
+            cal = self._get_threshold(city, market_type, direction)
+        if cal is None:
+            return None
+        return {
+            "calibrated_prob": cal.predict(raw_prob),
+            "source": "logistic+isotonic",
+        }
